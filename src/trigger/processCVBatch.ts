@@ -77,7 +77,7 @@ export const processCVBatch = task({
 
     let processed = 0;
     let failed = 0;
-    const holdQueue: any[] = [];
+    let heldForReview = 0;
 
     // 3) Process each file (sequential to reduce rate limiting)
     for (const file of files) {
@@ -102,20 +102,28 @@ export const processCVBatch = task({
         // Quick parse (regex first, Gemini only if needed)
         const contactInfo = await quickParse(rawText);
 
-        if (!contactInfo.email && !contactInfo.phone) {
-          logger.warn("Missing contact info -> sending to hold queue", {
-            file: file.name,
-            extracted: contactInfo,
-          });
-          holdQueue.push({
-            file_name: file.name,
-            file_path: file.path,
-            extracted_name: contactInfo.full_name,
-            raw_text: rawText,
-          });
-          continue;
-        }
+       if (!contactInfo.email && !contactInfo.phone) {
+  logger.warn("Missing contact info -> inserting to hold_queue NOW", {
+    file: file.name,
+    extracted: contactInfo,
+  });
+  
+  // Insert to database immediately (not batched)
+  await addSingleToHoldQueue(batchId, clientId, {
+    file_name: file.name,
+    file_path: file.path,
+    extracted_name: contactInfo.full_name,
+    raw_text: rawText,
+    extracted_data: {
+      full_name: contactInfo.full_name,
+      email: contactInfo.email,
+      phone: contactInfo.phone,
+    },
+  });
 
+  heldForReview++;
+  continue;
+}
         // Full parse
         const parsedData = await fullParse(rawText);
 
@@ -132,16 +140,43 @@ export const processCVBatch = task({
 
         logger.info("Candidate saved to Supabase", { file: file.name, candidateId });
 
-        // TRY GHL sync (non-blocking - won't stop processing if it fails)
+        // 🔥 CHECK FOR EXISTING GHL CONTACT FIRST
         let ghlContactId = null;
         try {
-          ghlContactId = await createGHLContact(parsedData, ghlAccessToken);
-          await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
+          // Search for existing contact by email/phone
+          const existingContactId = await findExistingGHLContact(
+            parsedData.email,
+            parsedData.phone,
+            ghlAccessToken
+          );
+
+          if (existingContactId) {
+            // DUPLICATE FOUND - Update existing instead of creating new
+            logger.info("Updating existing GHL contact", { 
+              file: file.name, 
+              contactId: existingContactId 
+            });
+            
+            ghlContactId = existingContactId;
+            await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
+            
+          } else {
+            // NO DUPLICATE - Create new contact
+            logger.info("Creating new GHL contact", { file: file.name });
+            
+            ghlContactId = await createGHLContact(parsedData, ghlAccessToken);
+            await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
+          }
           
           // Update candidate with GHL ID and status
           await updateCandidateGHL(candidateId, ghlContactId, "complete");
           
-          logger.info("GHL sync successful", { file: file.name, ghlContactId });
+          logger.info("GHL sync successful", { 
+            file: file.name, 
+            ghlContactId,
+            wasUpdate: !!existingContactId 
+          });
+          
         } catch (ghlError: any) {
           logger.error("GHL sync failed, but candidate saved to Supabase", {
             file: file.name,
@@ -150,37 +185,33 @@ export const processCVBatch = task({
           });
           // Don't throw - continue processing other files
         }
+       
 
         processed++;
         await updateBatchProgress(batchId, processed, files.length);
-      } catch (error: any) {
+       } catch (error: any) {
         logger.error("Failed to process file", {
           file: file?.name,
           error: error?.message || error,
         });
         failed++;
       }
-    }
+    }  // ← This closes the for loop
 
-    // 4) Hold queue
-    if (holdQueue.length > 0) {
-      await addToHoldQueue(batchId, clientId, holdQueue);
-    }
-
-    // 5) Complete
-    const finalStatus = holdQueue.length > 0 ? "awaiting_input" : "complete";
+    // 4) Complete
+    const finalStatus = heldForReview > 0 ? "awaiting_input" : "complete";
     await updateBatchStatus(batchId, finalStatus, processed);
 
     logger.info("Batch processing complete", {
       processed,
       failed,
-      held: holdQueue.length,
+      held: heldForReview,
       batchId,
     });
 
-    return { processed, failed, held: holdQueue.length, batchId };
-  },
-});
+    return { processed, failed, held: heldForReview, batchId };
+  },  // ← This closes the run: async function
+});   // ← This closes the task({ ... })
 
 // ============================================
 // HELPERS: SUPABASE STORAGE
@@ -515,7 +546,10 @@ async function extractText(buffer: ArrayBuffer, fileName: string): Promise<strin
 
 async function quickParse(rawText: string): Promise<{ full_name: string | null; email: string | null; phone: string | null }> {
   const emailMatch = rawText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  const phoneMatch = rawText.match(/(\+?\d[\d\s().-]{7,}\d)/);
+  
+  // 🔥 FIXED: Stricter phone regex that won't match year ranges like "2023 - 2025"
+  // Must start with + OR have parentheses OR be clearly phone-formatted
+  const phoneMatch = rawText.match(/(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{4,}/);
 
   const regexResult = {
     full_name: null,
@@ -565,6 +599,63 @@ ${rawText.substring(0, 3000)}`,
   }
 }
 
+async function findExistingGHLContact(
+  email: string | null,
+  phone: string | null,
+  accessToken: string
+): Promise<string | null> {
+  // Search by email first
+  if (email && isValidEmail(email)) {
+    const emailUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${GHL_LOCATION_ID}&query=${encodeURIComponent(email)}`;
+    
+    const emailResponse = await fetch(emailUrl, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Version: "2021-07-28",
+      },
+    });
+
+    if (emailResponse.ok) {
+      const data = await emailResponse.json();
+      if (data.contacts && data.contacts.length > 0) {
+        logger.info("Found existing GHL contact by email", { 
+          email, 
+          contactId: data.contacts[0].id 
+        });
+        return data.contacts[0].id;
+      }
+    }
+  }
+
+  // Search by phone
+  if (phone) {
+    const normalized = normalizePhone(phone);
+    if (normalized) {
+      const phoneUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${GHL_LOCATION_ID}&query=${encodeURIComponent(normalized)}`;
+      
+      const phoneResponse = await fetch(phoneUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Version: "2021-07-28",
+        },
+      });
+
+      if (phoneResponse.ok) {
+        const data = await phoneResponse.json();
+        if (data.contacts && data.contacts.length > 0) {
+          logger.info("Found existing GHL contact by phone", { 
+            phone: normalized, 
+            contactId: data.contacts[0].id 
+          });
+          return data.contacts[0].id;
+        }
+      }
+    }
+  }
+
+  logger.info("No existing GHL contact found", { email, phone });
+  return null;
+}
 async function fullParse(rawText: string): Promise<ParsedCV> {
   const output = await geminiGenerateText({
     parts: [
@@ -864,24 +955,52 @@ async function updateBatchProgress(batchId: string, processed: number, _total: n
   });
 }
 
-async function addToHoldQueue(batchId: string, clientId: string, items: any[]): Promise<void> {
-  const records = items.map((item) => ({
+async function addSingleToHoldQueue(
+  batchId: string,
+  clientId: string,
+  item: {
+    file_name: string;
+    file_path: string;
+    extracted_name: string | null;
+    raw_text: string;
+    extracted_data?: any;
+  }
+): Promise<string> {
+  const record = {
     batch_id: batchId,
     client_id: clientId,
     extracted_name: item.extracted_name,
     cv_file_path: item.file_path,
     cv_raw_text: item.raw_text,
-    status: "pending",
-  }));
+    status: 'pending',
+    extraction_data: item.extracted_data || null,
+    file_name: item.file_name,
+  };
 
-  await fetch(`${SUPABASE_URL}/rest/v1/hold_queue`, {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/hold_queue`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
       apikey: SUPABASE_SERVICE_KEY,
       "Content-Type": "application/json",
-      Prefer: "return=minimal",
+      Prefer: "return=representation",
     },
-    body: JSON.stringify(records),
+    body: JSON.stringify(record),
   });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to add to hold queue: ${errorText}`);
+  }
+
+  const result = await response.json();
+  const insertedId = result[0]?.id;
+
+  logger.info("Added to hold_queue", { 
+    id: insertedId, 
+    file: item.file_name,
+    batchId 
+  });
+
+  return insertedId;
 }
