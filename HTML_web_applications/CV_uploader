@@ -1,0 +1,2169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV Upload Portal | Hexona</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    /* ============================================
+       HEXONA CV UPLOAD - PRODUCTION VERSION
+       
+       FEATURES:
+       ✅ 4-stage progress tracking
+       ✅ Real-time inline review forms
+       ✅ Duplicate detection with modal
+       ✅ CV preview functionality
+       ✅ Live success list
+       ✅ Supabase Realtime integration
+       🔥 FIX: Checks for existing records after subscription
+       ============================================ */
+
+    :root {
+      --bg-primary: #0a0f1c;
+      --bg-secondary: #111827;
+      --bg-card: #1a2234;
+      --bg-hover: #232d42;
+      --border: #2a3650;
+      --border-focus: #3b82f6;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.1);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.1);
+      --error: #ef4444;
+      --error-bg: rgba(239, 68, 68, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .logo {
+      font-family: 'Space Mono', monospace;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .header h1 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header p {
+      color: var(--text-secondary);
+      font-size: 16px;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      margin-bottom: 24px;
+    }
+
+    .card-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .required {
+      color: var(--error);
+    }
+
+    select, input[type="text"], input[type="email"], input[type="tel"] {
+      width: 100%;
+      padding: 12px 16px;
+      font-size: 15px;
+      font-family: inherit;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-primary);
+      transition: all 0.2s ease;
+    }
+
+    select:focus, input:focus {
+      outline: none;
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }
+
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: var(--bg-secondary);
+    }
+
+    .upload-zone:hover {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.05);
+    }
+
+    .upload-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.1);
+      transform: scale(1.01);
+    }
+
+    .upload-zone.has-files {
+      border-color: var(--success);
+      background: var(--success-bg);
+    }
+
+    .upload-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    #file-input {
+      display: none;
+    }
+
+    .file-list {
+      margin-top: 24px;
+    }
+
+    .file-list-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .file-count {
+      font-family: 'Space Mono', monospace;
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    .clear-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+    }
+
+    .clear-btn:hover {
+      color: var(--error);
+      background: var(--error-bg);
+    }
+
+    .file-items {
+      max-height: 240px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-secondary);
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .file-item:last-child {
+      border-bottom: none;
+    }
+
+    .file-item .file-icon {
+      font-size: 20px;
+    }
+
+    .file-item .file-name {
+      flex: 1;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-item .file-size {
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .file-item .remove-file {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      font-size: 16px;
+      transition: all 0.2s ease;
+    }
+
+    .file-item .remove-file:hover {
+      color: var(--error);
+      background: var(--error-bg);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 14px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+      width: 100%;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Progress Section */
+    .progress-section {
+      display: none;
+      margin-top: 24px;
+    }
+
+    .progress-section.show {
+      display: block;
+    }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .progress-title {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .progress-stats {
+      font-family: 'Space Mono', monospace;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .progress-bar {
+      height: 8px;
+      background: var(--bg-secondary);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent) 0%, #8b5cf6 100%);
+      border-radius: 4px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .progress-stages {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .progress-stage {
+      text-align: center;
+      padding: 12px;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      transition: all 0.3s ease;
+    }
+
+    .progress-stage.active {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    .progress-stage.complete {
+      border-color: var(--success);
+      background: var(--success-bg);
+    }
+
+    .stage-icon {
+      font-size: 24px;
+      margin-bottom: 8px;
+      opacity: 0.5;
+    }
+
+    .progress-stage.active .stage-icon,
+    .progress-stage.complete .stage-icon {
+      opacity: 1;
+    }
+
+    .stage-label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .progress-stage.active .stage-label {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .progress-stage.complete .stage-label {
+      color: var(--success);
+    }
+
+    .stage-count {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Inline Review Forms */
+    .inline-reviews {
+      margin-top: 24px;
+      display: none;
+    }
+
+    .inline-reviews.show {
+      display: block;
+    }
+
+    .inline-reviews-header {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: var(--warning);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .review-form {
+      background: var(--warning-bg);
+      border: 2px solid var(--warning);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .review-form-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .review-file-icon {
+      font-size: 32px;
+      cursor: pointer;
+      transition: transform 0.2s ease;
+    }
+
+    .review-file-icon:hover {
+      transform: scale(1.1);
+    }
+
+    .review-file-info {
+      flex: 1;
+    }
+
+    .review-file-info h4 {
+      font-size: 15px;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+
+    .review-file-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: 'Space Mono', monospace;
+    }
+
+    .preview-btn {
+      padding: 6px 12px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .preview-btn:hover {
+      background: var(--accent-hover);
+    }
+
+    .review-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    @media (max-width: 600px) {
+      .review-fields {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .review-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .review-field label {
+      font-size: 13px;
+      margin-bottom: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .review-field input {
+      padding: 10px 14px;
+      font-size: 14px;
+    }
+
+    .review-field.found input {
+      border-color: var(--success);
+      background: var(--success-bg);
+    }
+
+    .review-field.missing input {
+      border-color: var(--warning);
+      animation: pulse 2s infinite;
+    }
+
+    .review-field.duplicate input {
+      border-color: var(--error);
+      background: var(--error-bg);
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+      }
+      50% {
+        box-shadow: 0 0 0 4px rgba(245, 158, 11, 0);
+      }
+    }
+
+    .field-status {
+      font-size: 11px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .field-status.found {
+      color: var(--success);
+    }
+
+    .field-status.missing {
+      color: var(--warning);
+    }
+
+    .field-status.duplicate {
+      color: var(--error);
+      cursor: pointer;
+    }
+
+    .review-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+    }
+
+    .btn-skip {
+      padding: 10px 20px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-skip:hover {
+      background: var(--bg-hover);
+    }
+
+    .btn-submit-review {
+      padding: 10px 24px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-submit-review:hover:not(:disabled) {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-submit-review:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .review-form.submitted {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .submitted-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      background: var(--success);
+      color: white;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Duplicate Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 600px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      animation: modalSlideIn 0.3s ease;
+    }
+
+    @keyframes modalSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-20px) scale(0.95);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-icon {
+      font-size: 32px;
+    }
+
+    .modal-header h3 {
+      flex: 1;
+      font-size: 20px;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 24px;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+    }
+
+    .modal-close:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+
+    .duplicate-info {
+      background: var(--error-bg);
+      border: 1px solid var(--error);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+
+    .duplicate-warning {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--error);
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .duplicate-details {
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .comparison-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .comparison-card h4 {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .comparison-field {
+      margin-bottom: 12px;
+    }
+
+    .comparison-field:last-child {
+      margin-bottom: 0;
+    }
+
+    .comparison-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .comparison-value {
+      font-size: 14px;
+      color: var(--text-primary);
+      font-family: 'Space Mono', monospace;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn-modal {
+      flex: 1;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-modal-secondary {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    .btn-modal-secondary:hover {
+      background: var(--bg-hover);
+    }
+
+    .btn-modal-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-modal-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    .btn-modal-danger {
+      background: var(--error);
+      color: white;
+    }
+
+    .btn-modal-danger:hover {
+      background: #dc2626;
+    }
+
+    /* Success List */
+    .success-list {
+      display: none;
+      margin-top: 24px;
+    }
+
+    .success-list.show {
+      display: block;
+    }
+
+    .success-list-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--success);
+    }
+
+    .success-items {
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-secondary);
+    }
+
+    .success-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.2s ease;
+    }
+
+    .success-item:last-child {
+      border-bottom: none;
+    }
+
+    .success-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .success-icon {
+      font-size: 20px;
+    }
+
+    .success-name {
+      flex: 1;
+      font-size: 14px;
+    }
+
+    .success-meta {
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Status Messages */
+    .status-message {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      border-radius: 10px;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+
+    .status-message.show {
+      display: flex;
+    }
+
+    .status-message.success {
+      background: var(--success-bg);
+      border: 1px solid var(--success);
+      color: var(--success);
+    }
+
+    .status-message.error {
+      background: var(--error-bg);
+      border: 1px solid var(--error);
+      color: var(--error);
+    }
+
+    .status-message.info {
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+
+    .status-icon {
+      font-size: 20px;
+    }
+
+    /* Completion Card */
+    .completion-card {
+      display: none;
+      text-align: center;
+      padding: 48px 24px;
+    }
+
+    .completion-card.show {
+      display: block;
+    }
+
+    .completion-icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+    }
+
+    .completion-stats {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      margin-bottom: 32px;
+    }
+
+    .stat {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-family: 'Space Mono', monospace;
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .btn-secondary {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="logo">Hexona</div>
+      <h1>CV Upload Portal</h1>
+      <p>Upload candidate CVs for processing and matching</p>
+    </div>
+
+    <!-- Main Upload Card -->
+    <div class="card" id="upload-card">
+      <div class="card-title">
+        <span class="icon">📄</span>
+        Upload Configuration
+      </div>
+
+      <!-- Colleague -->
+      <div class="form-group">
+        <label>Colleague <span class="required">*</span></label>
+        <select id="colleague-select" required>
+          <option value="">Select colleague...</option>
+          <option value="Karen Andrews">Karen Andrews</option>
+          <option value="Oliver Smith">Oliver Smith</option>
+          <option value="Amelia Johnson">Amelia Johnson</option>
+          <option value="James Wilson">James Wilson</option>
+          <option value="Emma Davis">Emma Davis</option>
+        </select>
+      </div>
+
+      <!-- Upload Zone -->
+      <div class="form-group">
+        <label>CV Files <span class="required">*</span></label>
+        <div class="upload-zone" id="upload-zone">
+          <div class="upload-icon">📁</div>
+          <h3>Drag & drop CV files here</h3>
+          <p>or click to browse</p>
+          <div class="formats">PDF, DOCX, DOC, TXT • Max 500 files</div>
+        </div>
+        <input type="file" id="file-input" multiple accept=".pdf,.docx,.doc,.txt">
+      </div>
+
+      <!-- File List -->
+      <div class="file-list" id="file-list" style="display: none;">
+        <div class="file-list-header">
+          <span class="file-count" id="file-count">0 files selected</span>
+          <button class="clear-btn" id="clear-files">Clear all</button>
+        </div>
+        <div class="file-items" id="file-items"></div>
+      </div>
+
+      <!-- Upload Button -->
+      <button class="btn btn-primary" id="upload-btn" disabled>
+        <span id="btn-text">Upload & Process</span>
+      </button>
+
+      <!-- Progress Section -->
+      <div class="progress-section" id="progress-section">
+        <div class="progress-header">
+          <span class="progress-title" id="progress-title">Uploading files...</span>
+          <span class="progress-stats" id="progress-stats">0 / 0</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+
+        <!-- 4-Stage Progress -->
+        <div class="progress-stages">
+          <div class="progress-stage" id="stage-upload">
+            <div class="stage-icon">📤</div>
+            <div class="stage-label">Upload</div>
+            <div class="stage-count" id="stage-upload-count">0/0</div>
+          </div>
+          <div class="progress-stage" id="stage-parse">
+            <div class="stage-icon">🔍</div>
+            <div class="stage-label">Parse</div>
+            <div class="stage-count" id="stage-parse-count">0/0</div>
+          </div>
+          <div class="progress-stage" id="stage-review">
+            <div class="stage-icon">⚠️</div>
+            <div class="stage-label">Review</div>
+            <div class="stage-count" id="stage-review-count">0</div>
+          </div>
+          <div class="progress-stage" id="stage-complete">
+            <div class="stage-icon">✅</div>
+            <div class="stage-label">Complete</div>
+            <div class="stage-count" id="stage-complete-count">0/0</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inline Review Forms -->
+      <div class="inline-reviews" id="inline-reviews">
+        <div class="inline-reviews-header">
+          ⚠️ <span id="review-count">0</span> CV(s) need your attention
+        </div>
+        <div id="review-forms-container">
+          <!-- Review forms appear here -->
+        </div>
+      </div>
+
+      <!-- Success List -->
+      <div class="success-list" id="success-list">
+        <div class="success-list-header">
+          ✅ Successfully Processed Candidates
+        </div>
+        <div class="success-items" id="success-items">
+          <!-- Success items appear here -->
+        </div>
+      </div>
+
+      <!-- Status Message -->
+      <div class="status-message" id="status-message">
+        <span class="status-icon"></span>
+        <span class="status-text"></span>
+      </div>
+    </div>
+
+    <!-- Completion Card -->
+    <div class="card completion-card" id="completion-card">
+      <div class="completion-icon">✅</div>
+      <h2>Upload Complete!</h2>
+      <p id="completion-message">Your CVs have been processed successfully.</p>
+      <div class="completion-stats">
+        <div class="stat">
+          <div class="stat-value" id="stat-processed">0</div>
+          <div class="stat-label">Processed</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-reviewed">0</div>
+          <div class="stat-label">Reviewed</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-batch">-</div>
+          <div class="stat-label">Batch ID</div>
+        </div>
+      </div>
+      <button class="btn btn-secondary" id="upload-more-btn">Upload More CVs</button>
+    </div>
+  </div>
+
+  <!-- Duplicate Detection Modal -->
+  <div class="modal-overlay" id="duplicate-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-icon">⚠️</span>
+        <h3>Duplicate Candidate Detected</h3>
+        <button class="modal-close" onclick="closeDuplicateModal()">×</button>
+      </div>
+
+      <div class="duplicate-info">
+        <div class="duplicate-warning">
+          <span>⚠️</span>
+          <span>This candidate already exists in the system</span>
+        </div>
+        <div class="duplicate-details" id="duplicate-details"></div>
+      </div>
+
+      <div class="comparison-grid">
+        <div class="comparison-card">
+          <h4>🆕 New CV</h4>
+          <div id="new-cv-data"></div>
+        </div>
+        <div class="comparison-card">
+          <h4>📋 Existing Record</h4>
+          <div id="existing-cv-data"></div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-modal btn-modal-secondary" onclick="skipDuplicate()">
+          Skip This CV
+        </button>
+        <button class="btn-modal btn-modal-primary" onclick="updateExisting()">
+          Update Existing
+        </button>
+        <button class="btn-modal btn-modal-danger" onclick="createNew()">
+          Create New Anyway
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supabase JS -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  
+  <script>
+    // ============================================
+    // 🔥 CONFIGURATION - UPDATE THESE VALUES
+    // ============================================
+    const SUPABASE_URL = 'https://nxlzdqskcqbikzpxhjam.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54bHpkcXNrY3FiaWt6cHhoamFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTg2MTAsImV4cCI6MjA4MjQ3NDYxMH0.wYiBr5WMblMPbKfoO6HELLC5PpxYvRc0F9ITrkfjJNM';
+    const STORAGE_BUCKET = 'cv-uploads';
+    const CLIENT_ID = 'demo-client-001';
+
+    // Initialize Supabase
+    const { createClient } = window.supabase;
+    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ============================================
+    // STATE
+    // ============================================
+    let selectedFiles = [];
+    let currentBatchId = null;
+    let realtimeChannel = null;
+    let reviewForms = {};
+    let submittedReviews = 0;
+    let successfulUploads = [];
+    let currentDuplicateContext = null;
+
+    // Stage tracking
+    let stageStats = {
+      upload: { current: 0, total: 0 },
+      parse: { current: 0, total: 0 },
+      review: 0,
+      complete: { current: 0, total: 0 }
+    };
+
+    // DOM Elements
+    const uploadZone = document.getElementById('upload-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileList = document.getElementById('file-list');
+    const fileItems = document.getElementById('file-items');
+    const fileCount = document.getElementById('file-count');
+    const clearFilesBtn = document.getElementById('clear-files');
+    const uploadBtn = document.getElementById('upload-btn');
+    const btnText = document.getElementById('btn-text');
+    const progressSection = document.getElementById('progress-section');
+    const progressFill = document.getElementById('progress-fill');
+    const progressStats = document.getElementById('progress-stats');
+    const progressTitle = document.getElementById('progress-title');
+    const statusMessage = document.getElementById('status-message');
+    const uploadCard = document.getElementById('upload-card');
+    const completionCard = document.getElementById('completion-card');
+    const colleagueSelect = document.getElementById('colleague-select');
+    const inlineReviews = document.getElementById('inline-reviews');
+    const reviewFormsContainer = document.getElementById('review-forms-container');
+    const reviewCountEl = document.getElementById('review-count');
+    const successList = document.getElementById('success-list');
+    const successItems = document.getElementById('success-items');
+
+    // ============================================
+    // FILE HANDLING
+    // ============================================
+    
+    uploadZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => addFiles(Array.from(e.target.files)));
+
+    uploadZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('drag-over');
+    });
+
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.classList.remove('drag-over');
+    });
+
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('drag-over');
+      addFiles(Array.from(e.dataTransfer.files));
+    });
+
+    function addFiles(files) {
+      const validExtensions = ['.pdf', '.docx', '.doc', '.txt'];
+      const validFiles = files.filter(file => {
+        const ext = '.' + file.name.split('.').pop().toLowerCase();
+        return validExtensions.includes(ext);
+      });
+
+      if (validFiles.length < files.length) {
+        showStatus('Some files were skipped (unsupported format)', 'error');
+      }
+
+      selectedFiles = [...selectedFiles, ...validFiles].slice(0, 500);
+      renderFileList();
+      validateForm();
+    }
+
+    function renderFileList() {
+      if (selectedFiles.length === 0) {
+        fileList.style.display = 'none';
+        uploadZone.classList.remove('has-files');
+        return;
+      }
+
+      fileList.style.display = 'block';
+      uploadZone.classList.add('has-files');
+      fileCount.textContent = `${selectedFiles.length} file${selectedFiles.length !== 1 ? 's' : ''} selected`;
+
+      fileItems.innerHTML = selectedFiles.map((file, index) => `
+        <div class="file-item">
+          <span class="file-icon">${getFileIcon(file.name)}</span>
+          <span class="file-name">${file.name}</span>
+          <span class="file-size">${formatFileSize(file.size)}</span>
+          <button class="remove-file" onclick="removeFile(${index})">✕</button>
+        </div>
+      `).join('');
+    }
+
+    function removeFile(index) {
+      selectedFiles.splice(index, 1);
+      renderFileList();
+      validateForm();
+    }
+
+    clearFilesBtn.addEventListener('click', () => {
+      selectedFiles = [];
+      fileInput.value = '';
+      renderFileList();
+      validateForm();
+    });
+
+    function getFileIcon(filename) {
+      const ext = filename.split('.').pop().toLowerCase();
+      switch (ext) {
+        case 'pdf': return '📕';
+        case 'doc':
+        case 'docx': return '📘';
+        case 'txt': return '📄';
+        default: return '📄';
+      }
+    }
+
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    colleagueSelect.addEventListener('change', validateForm);
+
+    function validateForm() {
+      const hasFiles = selectedFiles.length > 0;
+      const hasColleague = colleagueSelect.value !== '';
+      uploadBtn.disabled = !(hasFiles && hasColleague);
+    }
+
+    // ============================================
+    // UPLOAD & REAL-TIME MONITORING
+    // ============================================
+
+    uploadBtn.addEventListener('click', startUpload);
+
+    async function startUpload() {
+      const colleague = colleagueSelect.value;
+      currentBatchId = `batch_${Date.now()}`;
+      submittedReviews = 0;
+      reviewForms = {};
+      successfulUploads = [];
+
+      // Initialize stage stats
+      stageStats = {
+        upload: { current: 0, total: selectedFiles.length },
+        parse: { current: 0, total: selectedFiles.length },
+        review: 0,
+        complete: { current: 0, total: selectedFiles.length }
+      };
+
+      // UI: Show progress
+      uploadBtn.disabled = true;
+      btnText.innerHTML = '<span class="spinner"></span> Uploading...';
+      progressSection.classList.add('show');
+      hideStatus();
+      updateStageUI('upload', 'active');
+
+      // 🔥 Subscribe to real-time BEFORE creating batch record
+      subscribeToRealtimeUpdates(currentBatchId);
+
+      let uploaded = 0;
+      let failed = 0;
+
+      // Upload each file
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        const filePath = `${CLIENT_ID}/${currentBatchId}/${file.name}`;
+
+        try {
+          const { data, error } = await supabaseClient.storage
+            .from(STORAGE_BUCKET)
+            .upload(filePath, file);
+
+          if (error) throw error;
+          uploaded++;
+          stageStats.upload.current++;
+        } catch (err) {
+          console.error(`Failed to upload ${file.name}:`, err);
+          failed++;
+        }
+
+        // Update progress
+        const progress = ((i + 1) / selectedFiles.length) * 100;
+        progressFill.style.width = `${progress}%`;
+        progressStats.textContent = `${i + 1} / ${selectedFiles.length}`;
+        updateStageCount('upload', stageStats.upload.current, stageStats.upload.total);
+      }
+
+      // Mark upload stage complete
+      updateStageUI('upload', 'complete');
+      updateStageUI('parse', 'active');
+
+      // Create batch record (this will trigger backend processing)
+      try {
+        const { error } = await supabaseClient
+          .from('processing_batches')
+          .insert({
+            id: currentBatchId,
+            client_id: null,
+            file_count: uploaded,
+            processed_count: 0,
+            status: 'pending',
+            colleague: colleague
+          });
+
+        if (error) console.error('Failed to create batch record:', error);
+      } catch (err) {
+        console.error('Batch record error:', err);
+      }
+
+      // Update UI
+      progressTitle.textContent = 'Processing CVs...';
+      btnText.innerHTML = '<span class="spinner"></span> Processing...';
+
+      // Monitor batch completion
+      checkBatchCompletion(currentBatchId, uploaded);
+    }
+
+    // ============================================
+    // REAL-TIME SUBSCRIPTIONS
+    // ============================================
+
+    function subscribeToRealtimeUpdates(batchId) {
+      console.log('🔌 Subscribing to real-time updates for batch:', batchId);
+
+      if (realtimeChannel) {
+        realtimeChannel.unsubscribe();
+      }
+
+      realtimeChannel = supabaseClient
+        .channel('batch-updates')
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'hold_queue',
+            filter: `batch_id=eq.${batchId}`
+          },
+          (payload) => {
+            console.log('🔔 HOLD_QUEUE INSERT EVENT:', payload);
+            handleNewReviewNeeded(payload.new);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'candidates',
+            filter: `batch_id=eq.${batchId}`
+          },
+          (payload) => {
+            console.log('✅ CANDIDATES INSERT EVENT:', payload);
+            handleCandidateProcessed(payload.new);
+          }
+        )
+        .subscribe(async (status) => {
+          console.log('📡 Realtime subscription status:', status);
+          if (status === 'SUBSCRIBED') {
+            console.log('✅ Successfully subscribed to Realtime events');
+            
+            // 🔥 FIX: Wait 2 seconds before checking (give backend time to insert)
+            console.log('⏳ Waiting 2 seconds for backend to process...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            console.log('🔍 Checking for existing hold_queue records...');
+            await checkForExistingRecords(batchId);
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error('❌ Realtime subscription failed:', status);
+          }
+        });
+    }
+
+    // 🔥 NEW: Check for records that were inserted before subscription
+    async function checkForExistingRecords(batchId) {
+      try {
+        // Check hold_queue
+        const { data: holdItems, error: holdError } = await supabaseClient
+          .from('hold_queue')
+          .select('*')
+          .eq('batch_id', batchId)
+          .eq('status', 'pending');
+
+        if (holdError) {
+          console.error('Error checking hold_queue:', holdError);
+        } else if (holdItems && holdItems.length > 0) {
+          console.log(`📋 Found ${holdItems.length} existing hold_queue records`);
+          holdItems.forEach(item => {
+            console.log('🔔 Processing existing hold item:', item);
+            handleNewReviewNeeded(item);
+          });
+        } else {
+          console.log('✅ No existing hold_queue records (waiting for new ones)');
+        }
+
+        // Check candidates
+        const { data: candidates, error: candidatesError } = await supabaseClient
+          .from('candidates')
+          .select('*')
+          .eq('batch_id', batchId);
+
+        if (candidatesError) {
+          console.error('Error checking candidates:', candidatesError);
+        } else if (candidates && candidates.length > 0) {
+          console.log(`📋 Found ${candidates.length} existing candidate records`);
+          candidates.forEach(candidate => {
+            console.log('✅ Processing existing candidate:', candidate);
+            handleCandidateProcessed(candidate);
+          });
+        } else {
+          console.log('✅ No existing candidate records (waiting for new ones)');
+        }
+      } catch (error) {
+        console.error('Error in checkForExistingRecords:', error);
+      }
+    }
+
+    // ============================================
+    // HANDLE REVIEW NEEDED
+    // ============================================
+
+    async function handleNewReviewNeeded(holdItem) {
+      console.log('🔔 NEW REVIEW NEEDED - Hold item received:', holdItem);
+
+      // Update review stage
+      stageStats.review++;
+      updateStageUI('review', 'active');
+      updateStageCount('review', stageStats.review);
+      reviewCountEl.textContent = stageStats.review;
+
+      // Show reviews section
+      inlineReviews.classList.add('show');
+      console.log('✅ Review section shown');
+
+      // Check for duplicates
+      const extractedData = holdItem.extraction_data || {};
+      const email = extractedData.email || '';
+      const phone = extractedData.phone || '';
+
+      console.log('Checking for duplicates:', { email, phone });
+
+      let hasDuplicate = false;
+      let duplicateRecord = null;
+
+      if (email || phone) {
+        duplicateRecord = await checkForDuplicate(email, phone);
+        hasDuplicate = !!duplicateRecord;
+        console.log('Duplicate check result:', { hasDuplicate, duplicateRecord });
+      }
+
+      // Create review form
+      const formHtml = createReviewForm(holdItem, hasDuplicate, duplicateRecord);
+      reviewFormsContainer.insertAdjacentHTML('beforeend', formHtml);
+      console.log('✅ Review form added to DOM for:', holdItem.file_name);
+
+      // Store reference
+      reviewForms[holdItem.id] = {
+        id: holdItem.id,
+        submitted: false,
+        data: holdItem,
+        duplicate: duplicateRecord
+      };
+      
+      console.log(`Total review forms: ${Object.keys(reviewForms).length}`);
+    }
+
+    // ============================================
+    // DUPLICATE DETECTION
+    // ============================================
+
+    async function checkForDuplicate(email, phone) {
+      try {
+        let query = supabaseClient
+          .from('candidates')
+          .select('*')
+          .limit(1);
+
+        if (email && phone) {
+          query = query.or(`email.eq.${email},phone.eq.${phone}`);
+        } else if (email) {
+          query = query.eq('email', email);
+        } else if (phone) {
+          query = query.eq('phone', phone);
+        }
+
+        const { data, error } = await query;
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          console.log('Duplicate found:', data[0]);
+          return data[0];
+        }
+
+        return null;
+      } catch (error) {
+        console.error('Error checking for duplicates:', error);
+        return null;
+      }
+    }
+
+    function createReviewForm(holdItem, hasDuplicate, duplicateRecord) {
+      const extractedData = holdItem.extraction_data || {};
+      const fullName = extractedData.full_name || holdItem.extracted_name || '';
+      const email = extractedData.email || '';
+      const phone = extractedData.phone || '';
+
+      let emailDuplicate = false;
+      let phoneDuplicate = false;
+
+      if (hasDuplicate && duplicateRecord) {
+        if (email && duplicateRecord.email === email) emailDuplicate = true;
+        if (phone && duplicateRecord.phone === phone) phoneDuplicate = true;
+      }
+
+      return `
+        <div class="review-form" id="review-${holdItem.id}">
+          <div class="review-form-header">
+            <div class="review-file-icon" onclick="previewCV('${holdItem.id}')" title="Click to preview CV">
+              ${getFileIcon(holdItem.file_name || 'file.pdf')}
+            </div>
+            <div class="review-file-info">
+              <h4>${holdItem.file_name || 'CV File'}</h4>
+              <div class="review-file-meta">
+                ${hasDuplicate ? '⚠️ Potential duplicate detected' : 'Needs contact information'}
+              </div>
+            </div>
+            <button class="preview-btn" onclick="previewCV('${holdItem.id}')">
+              👁️ Preview
+            </button>
+          </div>
+
+          <div class="review-fields">
+            <div class="review-field ${fullName ? 'found' : 'missing'}">
+              <label>
+                <span>Full Name <span class="required">*</span></span>
+                <span class="field-status ${fullName ? 'found' : 'missing'}">
+                  ${fullName ? '✓ Found' : '⚠️ Required'}
+                </span>
+              </label>
+              <input 
+                type="text" 
+                class="review-input"
+                data-hold-id="${holdItem.id}"
+                data-field="full_name"
+                value="${escapeHtml(fullName)}"
+                placeholder="e.g., John Smith"
+                oninput="validateReviewForm('${holdItem.id}')"
+              >
+            </div>
+
+            <div class="review-field ${email ? (emailDuplicate ? 'duplicate' : 'found') : 'missing'}">
+              <label>
+                <span>Email Address</span>
+                <span class="field-status ${email ? (emailDuplicate ? 'duplicate' : 'found') : 'missing'}" 
+                      ${emailDuplicate ? `onclick="showDuplicateModal('${holdItem.id}')"` : ''}>
+                  ${email ? (emailDuplicate ? '⚠️ Duplicate!' : '✓ Found') : '⚠️ Need email OR phone'}
+                </span>
+              </label>
+              <input 
+                type="email" 
+                class="review-input"
+                data-hold-id="${holdItem.id}"
+                data-field="email"
+                value="${escapeHtml(email)}"
+                placeholder="e.g., john@example.com"
+                oninput="validateReviewForm('${holdItem.id}')"
+              >
+            </div>
+
+            <div class="review-field ${phone ? (phoneDuplicate ? 'duplicate' : 'found') : 'missing'}">
+              <label>
+                <span>Phone Number</span>
+                <span class="field-status ${phone ? (phoneDuplicate ? 'duplicate' : 'found') : 'missing'}"
+                      ${phoneDuplicate ? `onclick="showDuplicateModal('${holdItem.id}')"` : ''}>
+                  ${phone ? (phoneDuplicate ? '⚠️ Duplicate!' : '✓ Found') : '⚠️ Need email OR phone'}
+                </span>
+              </label>
+              <input 
+                type="tel" 
+                class="review-input"
+                data-hold-id="${holdItem.id}"
+                data-field="phone"
+                value="${escapeHtml(phone)}"
+                placeholder="e.g., +44 7700 900000"
+                oninput="validateReviewForm('${holdItem.id}')"
+              >
+            </div>
+          </div>
+
+          <div class="review-actions">
+            <button class="btn-skip" onclick="skipReview('${holdItem.id}')">
+              Skip for Now
+            </button>
+            ${hasDuplicate ? `
+              <button class="btn-submit-review" 
+                      style="background: var(--warning);"
+                      onclick="showDuplicateModal('${holdItem.id}')">
+                ⚠️ Resolve Duplicate
+              </button>
+            ` : `
+              <button 
+                class="btn-submit-review" 
+                id="submit-${holdItem.id}"
+                onclick="submitReview('${holdItem.id}')"
+                disabled
+              >
+                Submit & Continue
+              </button>
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    // ============================================
+    // CV PREVIEW
+    // ============================================
+
+    async function previewCV(holdId) {
+      const holdItem = reviewForms[holdId]?.data;
+      if (!holdItem) return;
+
+      const filePath = `${CLIENT_ID}/${holdItem.batch_id}/${holdItem.file_name}`;
+
+      try {
+        const { data, error } = await supabaseClient.storage
+          .from(STORAGE_BUCKET)
+          .createSignedUrl(filePath, 60);
+
+        if (error) throw error;
+
+        window.open(data.signedUrl, '_blank');
+      } catch (error) {
+        console.error('Failed to preview CV:', error);
+        showStatus('Failed to load CV preview', 'error');
+      }
+    }
+
+    // ============================================
+    // DUPLICATE MODAL
+    // ============================================
+
+    function showDuplicateModal(holdId) {
+      const reviewItem = reviewForms[holdId];
+      if (!reviewItem || !reviewItem.duplicate) return;
+
+      currentDuplicateContext = {
+        holdId: holdId,
+        newData: reviewItem.data.extraction_data || {},
+        existingData: reviewItem.duplicate
+      };
+
+      const duplicate = reviewItem.duplicate;
+      const newData = reviewItem.data.extraction_data || {};
+
+      document.getElementById('duplicate-details').innerHTML = `
+        Matching ${duplicate.email === newData.email ? 'email' : 'phone number'} found. 
+        Choose how to proceed with this candidate.
+      `;
+
+      document.getElementById('new-cv-data').innerHTML = `
+        <div class="comparison-field">
+          <div class="comparison-label">Name</div>
+          <div class="comparison-value">${escapeHtml(newData.full_name || 'Not found')}</div>
+        </div>
+        <div class="comparison-field">
+          <div class="comparison-label">Email</div>
+          <div class="comparison-value">${escapeHtml(newData.email || 'Not found')}</div>
+        </div>
+        <div class="comparison-field">
+          <div class="comparison-label">Phone</div>
+          <div class="comparison-value">${escapeHtml(newData.phone || 'Not found')}</div>
+        </div>
+      `;
+
+      document.getElementById('existing-cv-data').innerHTML = `
+        <div class="comparison-field">
+          <div class="comparison-label">Name</div>
+          <div class="comparison-value">${escapeHtml(duplicate.full_name || 'Not found')}</div>
+        </div>
+        <div class="comparison-field">
+          <div class="comparison-label">Email</div>
+          <div class="comparison-value">${escapeHtml(duplicate.email || 'Not found')}</div>
+        </div>
+        <div class="comparison-field">
+          <div class="comparison-label">Phone</div>
+          <div class="comparison-value">${escapeHtml(duplicate.phone || 'Not found')}</div>
+        </div>
+        <div class="comparison-field">
+          <div class="comparison-label">Last Updated</div>
+          <div class="comparison-value">${new Date(duplicate.updated_at).toLocaleDateString()}</div>
+        </div>
+      `;
+
+      document.getElementById('duplicate-modal').classList.add('show');
+    }
+
+    function closeDuplicateModal() {
+      document.getElementById('duplicate-modal').classList.remove('show');
+      currentDuplicateContext = null;
+    }
+
+    async function skipDuplicate() {
+      if (!currentDuplicateContext) return;
+      
+      const form = document.getElementById(`review-${currentDuplicateContext.holdId}`);
+      form.style.opacity = '0.3';
+      showStatus('CV skipped - marked as duplicate', 'info');
+      closeDuplicateModal();
+    }
+
+    async function updateExisting() {
+      if (!currentDuplicateContext) return;
+
+      const { holdId, existingData } = currentDuplicateContext;
+
+      try {
+        await supabaseClient
+          .from('hold_queue')
+          .update({
+            status: 'update_existing',
+            duplicate_candidate_id: existingData.id,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', holdId);
+
+        markReviewSubmitted(holdId, 'Will update existing record');
+        closeDuplicateModal();
+      } catch (error) {
+        console.error('Failed to mark for update:', error);
+        showStatus('Error: ' + error.message, 'error');
+      }
+    }
+
+    async function createNew() {
+      if (!currentDuplicateContext) return;
+
+      const { holdId } = currentDuplicateContext;
+
+      try {
+        const inputs = document.querySelectorAll(`input[data-hold-id="${holdId}"]`);
+        const contactInfo = {};
+        
+        inputs.forEach(input => {
+          const value = input.value.trim();
+          if (value) {
+            contactInfo[input.dataset.field] = value;
+          }
+        });
+
+        await supabaseClient
+          .from('hold_queue')
+          .update({
+            status: 'ready_for_processing',
+            manual_contact_info: contactInfo,
+            ignore_duplicate: true,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', holdId);
+
+        markReviewSubmitted(holdId, 'Creating new (duplicate ignored)');
+        closeDuplicateModal();
+      } catch (error) {
+        console.error('Failed to create new:', error);
+        showStatus('Error: ' + error.message, 'error');
+      }
+    }
+
+    function validateReviewForm(holdId) {
+      const inputs = document.querySelectorAll(`input[data-hold-id="${holdId}"]`);
+      let fullName = '';
+      let email = '';
+      let phone = '';
+
+      inputs.forEach(input => {
+        const field = input.dataset.field;
+        const value = input.value.trim();
+        
+        if (field === 'full_name') fullName = value;
+        if (field === 'email') email = value;
+        if (field === 'phone') phone = value;
+      });
+
+      const isValid = fullName && (email || phone);
+      const submitBtn = document.getElementById(`submit-${holdId}`);
+      if (submitBtn) submitBtn.disabled = !isValid;
+    }
+
+    async function submitReview(holdId) {
+      const inputs = document.querySelectorAll(`input[data-hold-id="${holdId}"]`);
+      const contactInfo = {};
+      
+      inputs.forEach(input => {
+        const value = input.value.trim();
+        if (value) {
+          contactInfo[input.dataset.field] = value;
+        }
+      });
+
+      try {
+        await supabaseClient
+          .from('hold_queue')
+          .update({
+            status: 'ready_for_processing',
+            manual_contact_info: contactInfo,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', holdId);
+
+        markReviewSubmitted(holdId, 'Contact info submitted');
+      } catch (error) {
+        console.error('Failed to update hold queue:', error);
+        showStatus(`Error: ${error.message}`, 'error');
+      }
+    }
+
+    function markReviewSubmitted(holdId, message) {
+      const form = document.getElementById(`review-${holdId}`);
+      form.classList.add('submitted');
+      form.querySelector('.review-form-header').insertAdjacentHTML('beforeend', 
+        '<span class="submitted-badge">✓ Submitted</span>'
+      );
+
+      reviewForms[holdId].submitted = true;
+      submittedReviews++;
+
+      showStatus(message, 'success');
+
+      // Check if all reviews are now submitted
+      checkIfAllReviewsComplete();
+    }
+
+    function checkIfAllReviewsComplete() {
+      const totalReviews = Object.keys(reviewForms).length;
+      
+      if (totalReviews === 0) return; // No reviews yet
+      
+      const completedReviews = Object.values(reviewForms).filter(r => r.submitted).length;
+      
+      console.log(`Reviews: ${completedReviews}/${totalReviews} completed`);
+      
+      // If all reviews are submitted, trigger completion
+      if (completedReviews === totalReviews) {
+        console.log('All reviews complete - finishing batch');
+        setTimeout(() => {
+          handleBatchComplete(currentBatchId, 'complete');
+        }, 1000); // Small delay to let final updates process
+      }
+    }
+
+    function skipReview(holdId) {
+      const form = document.getElementById(`review-${holdId}`);
+      form.style.opacity = '0.3';
+      showStatus('CV skipped - available in Review Queue', 'info');
+    }
+
+    // ============================================
+    // HANDLE SUCCESSFUL PROCESSING
+    // ============================================
+
+    function handleCandidateProcessed(candidate) {
+      console.log('✅ CANDIDATE PROCESSED - New candidate received:', candidate);
+
+      // Update parse stage
+      stageStats.parse.current++;
+      updateStageCount('parse', stageStats.parse.current, stageStats.parse.total);
+
+      if (stageStats.parse.current >= stageStats.parse.total) {
+        updateStageUI('parse', 'complete');
+      }
+
+      // Update complete stage
+      stageStats.complete.current++;
+      updateStageUI('complete', 'active');
+      updateStageCount('complete', stageStats.complete.current, stageStats.complete.total);
+
+      // Add to success list
+      successfulUploads.push(candidate);
+      addToSuccessList(candidate);
+      
+      console.log(`Success list now has ${successfulUploads.length} candidates`);
+    }
+
+    function addToSuccessList(candidate) {
+      successList.classList.add('show');
+
+      const item = document.createElement('div');
+      item.className = 'success-item';
+      item.innerHTML = `
+        <span class="success-icon">✅</span>
+        <span class="success-name">${escapeHtml(candidate.full_name || 'Unknown')}</span>
+        <span class="success-meta">${escapeHtml(candidate.email || candidate.phone || '')}</span>
+      `;
+      
+      successItems.insertBefore(item, successItems.firstChild);
+    }
+
+    // ============================================
+    // STAGE UI UPDATES
+    // ============================================
+
+    function updateStageUI(stage, status) {
+      const stageEl = document.getElementById(`stage-${stage}`);
+      stageEl.className = `progress-stage ${status}`;
+    }
+
+    function updateStageCount(stage, current, total) {
+      const countEl = document.getElementById(`stage-${stage}-count`);
+      if (total !== undefined) {
+        countEl.textContent = `${current}/${total}`;
+      } else {
+        countEl.textContent = current;
+      }
+    }
+
+    // ============================================
+    // BATCH COMPLETION
+    // ============================================
+
+    let batchCompletionTimer = null;
+    let expectedReviews = 0;
+    let isWaitingForReviews = false;
+
+    async function checkBatchCompletion(batchId, totalFiles) {
+      const checkInterval = setInterval(async () => {
+        try {
+          const { data, error } = await supabaseClient
+            .from('processing_batches')
+            .select('status, processed_count')
+            .eq('id', batchId)
+            .single();
+
+          if (error) throw error;
+
+          console.log('Batch status:', data);
+
+          // 🔥 Always poll for successful candidates
+          const { data: candidates, error: candidatesError } = await supabaseClient
+            .from('candidates')
+            .select('*')
+            .eq('batch_id', batchId);
+
+          if (!candidatesError && candidates) {
+            candidates.forEach(candidate => {
+              // Only process if we haven't seen this candidate yet
+              if (!successfulUploads.find(c => c.id === candidate.id)) {
+                console.log('✅ NEW CANDIDATE from polling:', candidate.full_name);
+                handleCandidateProcessed(candidate);
+              }
+            });
+          }
+
+          // If complete (no reviews needed), finish immediately
+          if (data.status === 'complete') {
+            clearInterval(checkInterval);
+            handleBatchComplete(batchId, data.status);
+            return;
+          }
+
+          // 🔥 If awaiting_input, actively poll hold_queue table
+          if (data.status === 'awaiting_input') {
+            if (!isWaitingForReviews) {
+              isWaitingForReviews = true;
+              console.log('✋ Batch awaiting input - polling hold_queue...');
+            }
+
+            // 🔥 Poll hold_queue directly (don't rely on Realtime)
+            const { data: holdItems, error: holdError } = await supabaseClient
+              .from('hold_queue')
+              .select('*')
+              .eq('batch_id', batchId)
+              .eq('status', 'pending');
+
+            if (holdError) {
+              console.error('Error polling hold_queue:', holdError);
+            } else if (holdItems && holdItems.length > 0) {
+              console.log(`📋 Found ${holdItems.length} items needing review via polling`);
+              
+              // Process any items we haven't seen yet
+              holdItems.forEach(item => {
+                if (!reviewForms[item.id]) {
+                  console.log('🔔 NEW HOLD ITEM from polling:', item.file_name);
+                  handleNewReviewNeeded(item);
+                }
+              });
+
+              // If we have all the review forms now, stop polling
+              const reviewCount = Object.keys(reviewForms).length;
+              if (reviewCount === holdItems.length) {
+                console.log(`✅ All ${reviewCount} review forms loaded - stopping poll`);
+                clearInterval(checkInterval);
+                return;
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error checking batch status:', error);
+        }
+      }, 2000); // Poll every 2 seconds
+    }
+
+    async function handleBatchComplete(batchId, status) {
+      console.log('Batch complete:', { batchId, status });
+
+      if (realtimeChannel) {
+        realtimeChannel.unsubscribe();
+      }
+
+      updateStageUI('complete', 'complete');
+
+      const totalReviews = Object.keys(reviewForms).length;
+      const processed = successfulUploads.length;
+
+      document.getElementById('stat-processed').textContent = processed;
+      document.getElementById('stat-reviewed').textContent = submittedReviews;
+      document.getElementById('stat-batch').textContent = batchId.split('_')[1];
+
+      if (totalReviews > submittedReviews) {
+        document.getElementById('completion-message').textContent = 
+          `${processed} CVs processed. ${totalReviews - submittedReviews} CVs need review (check Review Queue).`;
+      } else {
+        document.getElementById('completion-message').textContent = 
+          'All CVs have been processed successfully!';
+      }
+
+      uploadCard.style.display = 'none';
+      completionCard.classList.add('show');
+    }
+
+    // ============================================
+    // UTILITIES
+    // ============================================
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function showStatus(message, type = 'info') {
+      const icons = { success: '✓', error: '✕', info: 'ℹ' };
+      statusMessage.querySelector('.status-icon').textContent = icons[type];
+      statusMessage.querySelector('.status-text').textContent = message;
+      statusMessage.className = `status-message show ${type}`;
+      
+      setTimeout(() => {
+        statusMessage.classList.remove('show');
+      }, 5000);
+    }
+
+    function hideStatus() {
+      statusMessage.classList.remove('show');
+    }
+
+    document.getElementById('upload-more-btn').addEventListener('click', () => {
+      selectedFiles = [];
+      fileInput.value = '';
+      renderFileList();
+      validateForm();
+      completionCard.classList.remove('show');
+      uploadCard.style.display = 'block';
+      resetUploadUI();
+      hideStatus();
+      reviewFormsContainer.innerHTML = '';
+      inlineReviews.classList.remove('show');
+      successItems.innerHTML = '';
+      successList.classList.remove('show');
+    });
+
+    function resetUploadUI() {
+      uploadBtn.disabled = false;
+      btnText.textContent = 'Upload & Process';
+      progressSection.classList.remove('show');
+      progressFill.style.width = '0%';
+      progressTitle.textContent = 'Uploading files...';
+      
+      ['upload', 'parse', 'review', 'complete'].forEach(stage => {
+        updateStageUI(stage, '');
+      });
+    }
+  </script>
+</body>
+</html>
