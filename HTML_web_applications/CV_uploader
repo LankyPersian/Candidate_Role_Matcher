@@ -18,6 +18,7 @@
        ✅ CV preview functionality
        ✅ Live success list
        ✅ Supabase Realtime integration
+       ✅ Upload Type: General Pool / Specific Job
        🔥 FIX: Checks for existing records after subscription
        ============================================ */
 
@@ -140,6 +141,64 @@
       outline: none;
       border-color: var(--border-focus);
       box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }
+
+    /* Radio Group Styles */
+    .radio-group {
+      display: flex;
+      gap: 16px;
+    }
+
+    .radio-option {
+      flex: 1;
+      position: relative;
+    }
+
+    .radio-option input[type="radio"] {
+      position: absolute;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .radio-option label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: 0;
+    }
+
+    .radio-option input[type="radio"]:checked + label {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    .radio-option label .radio-dot {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--border);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .radio-option input[type="radio"]:checked + label .radio-dot {
+      border-color: var(--accent);
+    }
+
+    .radio-option input[type="radio"]:checked + label .radio-dot::after {
+      content: '';
+      width: 10px;
+      height: 10px;
+      background: var(--accent);
+      border-radius: 50%;
     }
 
     .upload-zone {
@@ -1003,6 +1062,33 @@
         </select>
       </div>
 
+      <!-- ✅ NEW: Upload Type -->
+      <div class="form-group">
+        <label>Upload Type</label>
+        <div class="radio-group">
+          <div class="radio-option">
+            <input type="radio" name="upload-type" id="type-general" value="general" checked>
+            <label for="type-general">
+              <span class="radio-dot"></span>
+              <span>General Pool</span>
+            </label>
+          </div>
+          <div class="radio-option">
+            <input type="radio" name="upload-type" id="type-specific" value="specific">
+            <label for="type-specific">
+              <span class="radio-dot"></span>
+              <span>Specific Job</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ✅ NEW: Job ID (only shown when Specific Job selected) -->
+      <div class="form-group" id="job-id-group" style="display: none;">
+        <label>Job ID <span class="required">*</span></label>
+        <input type="text" id="job-id-input" placeholder="e.g., JOB-2025-047">
+      </div>
+
       <!-- Upload Zone -->
       <div class="form-group">
         <label>CV Files <span class="required">*</span></label>
@@ -1213,6 +1299,12 @@
     const reviewCountEl = document.getElementById('review-count');
     const successList = document.getElementById('success-list');
     const successItems = document.getElementById('success-items');
+    
+    // ✅ NEW: Upload Type Elements
+    const jobIdGroup = document.getElementById('job-id-group');
+    const jobIdInput = document.getElementById('job-id-input');
+    const typeGeneral = document.getElementById('type-general');
+    const typeSpecific = document.getElementById('type-specific');
 
     // ============================================
     // FILE HANDLING
@@ -1303,12 +1395,32 @@
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    colleagueSelect.addEventListener('change', validateForm);
+    // ✅ NEW: Upload Type Toggle
+    typeGeneral.addEventListener('change', () => {
+      jobIdGroup.style.display = 'none';
+      jobIdInput.value = '';
+      validateForm();
+    });
 
+    typeSpecific.addEventListener('change', () => {
+      jobIdGroup.style.display = 'block';
+      validateForm();
+    });
+
+    colleagueSelect.addEventListener('change', validateForm);
+    jobIdInput.addEventListener('input', validateForm); // ✅ NEW
+
+    // ✅ UPDATED: Validation now includes Job ID check
     function validateForm() {
       const hasFiles = selectedFiles.length > 0;
       const hasColleague = colleagueSelect.value !== '';
-      uploadBtn.disabled = !(hasFiles && hasColleague);
+      const isSpecificJob = typeSpecific.checked;
+      const hasJobId = jobIdInput.value.trim() !== '';
+      
+      // If specific job selected, require job ID
+      const jobIdValid = !isSpecificJob || hasJobId;
+      
+      uploadBtn.disabled = !(hasFiles && hasColleague && jobIdValid);
     }
 
     // ============================================
@@ -1319,6 +1431,9 @@
 
     async function startUpload() {
       const colleague = colleagueSelect.value;
+      const jobId = jobIdInput.value.trim() || null; // ✅ NEW: Get job ID
+      const uploadType = document.querySelector('input[name="upload-type"]:checked').value; // ✅ NEW
+      
       currentBatchId = `batch_${Date.now()}`;
       submittedReviews = 0;
       reviewForms = {};
@@ -1374,7 +1489,7 @@
       updateStageUI('upload', 'complete');
       updateStageUI('parse', 'active');
 
-      // Create batch record (this will trigger backend processing)
+      // ✅ UPDATED: Create batch record with job_id
       try {
         const { error } = await supabaseClient
           .from('processing_batches')
@@ -1384,7 +1499,8 @@
             file_count: uploaded,
             processed_count: 0,
             status: 'pending',
-            colleague: colleague
+            colleague: colleague,
+            job_id: jobId // ✅ NEW: Include job_id
           });
 
         if (error) console.error('Failed to create batch record:', error);
@@ -1528,7 +1644,7 @@
       let duplicateRecord = null;
 
       if (email || phone) {
-        duplicateRecord = await checkForDuplicate(email, phone);
+        duplicateRecord = await checkForDuplicate(email, phone, holdItem);
         hasDuplicate = !!duplicateRecord;
         console.log('Duplicate check result:', { hasDuplicate, duplicateRecord });
       }
@@ -1553,36 +1669,62 @@
     // DUPLICATE DETECTION
     // ============================================
 
-    async function checkForDuplicate(email, phone) {
-      try {
-        let query = supabaseClient
-          .from('candidates')
-          .select('*')
-          .limit(1);
+   async function checkForDuplicate(email, phone, holdItem) {
+  // Check if GHL duplicate was already detected by backend
+  const extractedData = holdItem.extraction_data || {};
+  const ghlDuplicateId = extractedData.ghl_duplicate_contact_id;
 
-        if (email && phone) {
-          query = query.or(`email.eq.${email},phone.eq.${phone}`);
-        } else if (email) {
-          query = query.eq('email', email);
-        } else if (phone) {
-          query = query.eq('phone', phone);
-        }
-
-        const { data, error } = await query;
-
-        if (error) throw error;
-
-        if (data && data.length > 0) {
-          console.log('Duplicate found:', data[0]);
-          return data[0];
-        }
-
-        return null;
-      } catch (error) {
-        console.error('Error checking for duplicates:', error);
-        return null;
-      }
+  if (ghlDuplicateId) {
+    console.log('GHL duplicate detected by backend:', ghlDuplicateId);
+    
+    // Fetch the GHL contact details
+    try {
+      // Note: We can't fetch GHL contact details from frontend
+      // So we'll create a mock record with the info we have
+      const ghlDetails = extractedData.ghl_duplicate_contact_details;
+return {
+  id: ghlDuplicateId,
+  full_name: ghlDetails?.full_name || 'Existing Contact',
+  email: ghlDetails?.email || email || 'Not available',
+  phone: ghlDetails?.phone || phone || 'Not available',
+  source: 'GoHighLevel',
+  updated_at: ghlDetails?.updated_at || new Date().toISOString()
+};
+    } catch (error) {
+      console.error('Error creating duplicate record:', error);
     }
+  }
+
+  // Fallback: check Supabase candidates table (for old duplicates)
+  try {
+    let query = supabaseClient
+      .from('candidates')
+      .select('*')
+      .limit(1);
+
+    if (email && phone) {
+      query = query.or(`email.eq.${email},phone.eq.${phone}`);
+    } else if (email) {
+      query = query.eq('email', email);
+    } else if (phone) {
+      query = query.eq('phone', phone);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      console.log('Duplicate found in Supabase:', data[0]);
+      return data[0];
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Error checking for duplicates:', error);
+    return null;
+  }
+}
 
     function createReviewForm(holdItem, hasDuplicate, duplicateRecord) {
       const extractedData = holdItem.extraction_data || {};
@@ -1739,10 +1881,13 @@
       const duplicate = reviewItem.duplicate;
       const newData = reviewItem.data.extraction_data || {};
 
-      document.getElementById('duplicate-details').innerHTML = `
-        Matching ${duplicate.email === newData.email ? 'email' : 'phone number'} found. 
-        Choose how to proceed with this candidate.
-      `;
+      const source = duplicate.source === 'GoHighLevel' ? 'GoHighLevel' : 'Supabase Database';
+const sourceIcon = duplicate.source === 'GoHighLevel' ? '🔗' : '💾';
+
+document.getElementById('duplicate-details').innerHTML = `
+  ${sourceIcon} Matching ${duplicate.email === newData.email ? 'email' : 'phone number'} found in <strong>${source}</strong>. 
+  Choose how to proceed with this candidate.
+`;
 
       document.getElementById('new-cv-data').innerHTML = `
         <div class="comparison-field">
