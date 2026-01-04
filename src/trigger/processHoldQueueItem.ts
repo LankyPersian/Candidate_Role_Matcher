@@ -102,6 +102,15 @@ export const processHoldQueueItem = task({
         logger.info("Found existing candidate", { existingCandidateId });
       }
     }
+    
+     // Check if this is a GHL duplicate that needs updating
+    let ghlContactIdToUpdate = null;
+    if (holdItem.extraction_data?.ghl_duplicate_contact_id) {
+      ghlContactIdToUpdate = holdItem.extraction_data.ghl_duplicate_contact_id;
+      logger.info("GHL duplicate detected - will update existing contact", { 
+        ghlContactId: ghlContactIdToUpdate 
+      });
+    }
 
     let candidateId: string;
     
@@ -132,6 +141,13 @@ export const processHoldQueueItem = task({
     let ghlContactId = null;
 
     try {
+    // If we already have a GHL contact ID from duplicate detection, use it
+    if (ghlContactIdToUpdate) {
+      ghlContactId = ghlContactIdToUpdate;
+      await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
+      logger.info("Updated existing GHL contact (from duplicate detection)", { ghlContactId });
+    } else {
+      // Otherwise, search for existing contact
       const existingContactId = await findExistingGHLContact(
         parsedData.email,
         parsedData.phone,
@@ -147,6 +163,7 @@ export const processHoldQueueItem = task({
         await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
         logger.info("Created new GHL contact", { ghlContactId });
       }
+    }
 
       await updateCandidateGHL(candidateId, ghlContactId, "complete");
       logger.info("GHL sync successful", { candidateId, ghlContactId });

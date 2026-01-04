@@ -1909,6 +1909,12 @@ document.getElementById('duplicate-details').innerHTML = `
           <div class="comparison-label">Name</div>
           <div class="comparison-value">${escapeHtml(duplicate.full_name || 'Not found')}</div>
         </div>
+        ${duplicate.source === 'GoHighLevel' ? `
+        <div class="comparison-field">
+          <div class="comparison-label">GHL Contact ID</div>
+          <div class="comparison-value">${escapeHtml(duplicate.id || 'Not found')}</div>
+        </div>
+        ` : ''}
         <div class="comparison-field">
           <div class="comparison-label">Email</div>
           <div class="comparison-value">${escapeHtml(duplicate.email || 'Not found')}</div>
@@ -1951,6 +1957,7 @@ document.getElementById('duplicate-details').innerHTML = `
           .update({
             status: 'update_existing',
             duplicate_candidate_id: existingData.id,
+          ghl_duplicate_contact_id: existingData.source === 'GoHighLevel' ? existingData.id : null,
             updated_at: new Date().toISOString()
           })
           .eq('id', holdId);
