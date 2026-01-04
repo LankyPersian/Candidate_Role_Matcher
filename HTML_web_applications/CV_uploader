@@ -9,17 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
     /* ============================================
-       HEXONA CV UPLOAD - PRODUCTION VERSION
-       
-       FEATURES:
-       ✅ 4-stage progress tracking
-       ✅ Real-time inline review forms
-       ✅ Duplicate detection with modal
-       ✅ CV preview functionality
-       ✅ Live success list
-       ✅ Supabase Realtime integration
-       ✅ Upload Type: General Pool / Specific Job
-       🔥 FIX: Checks for existing records after subscription
+       HEXONA CV UPLOADER HTML Portal
        ============================================ */
 
     :root {
@@ -1732,8 +1722,24 @@ return {
       const email = extractedData.email || '';
       const phone = extractedData.phone || '';
 
-      let emailDuplicate = false;
-      let phoneDuplicate = false;
+     let emailDuplicate = false;
+let phoneDuplicate = false;
+
+// Normalize phone for comparison
+function normalizePhoneForComparison(phone) {
+  if (!phone) return '';
+  return phone.replace(/[\s\-\(\)\+]/g, '').replace(/^0/, '44').replace(/^44/, '');
+}
+
+if (hasDuplicate && duplicateRecord) {
+  if (email && duplicateRecord.email === email) emailDuplicate = true;
+  
+  if (phone && duplicateRecord.phone) {
+    const normalizedCV = normalizePhoneForComparison(phone);
+    const normalizedGHL = normalizePhoneForComparison(duplicateRecord.phone);
+    if (normalizedCV === normalizedGHL) phoneDuplicate = true;
+  }
+}
 
       if (hasDuplicate && duplicateRecord) {
         if (email && duplicateRecord.email === email) emailDuplicate = true;

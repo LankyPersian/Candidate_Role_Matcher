@@ -1,14 +1,32 @@
 // processCVBatch.ts
 import { task, logger } from "@trigger.dev/sdk";
 import { Buffer } from "buffer";
-import { buildGHLCustomFields } from "./ghl-transformers";
+
 
 const SUPABASE_URL = "https://nxlzdqskcqbikzpxhjam.supabase.co";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GHL_PRIVATE_KEY = process.env.GHL_PRIVATE_INTEGRATION_KEY!;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID!;
+// ============================================
+// GHL TRANSFORMERS (inline)
+// ============================================
+function buildGHLCustomFields(data: any): Record<string, string> {
+  const formatSkills = (skills: string[]) => {
+    if (!skills || skills.length === 0) return '';
+    return skills.map(skill => `• ${skill}`).join('\n');
+  };
 
+  const currentJob = data.work_history?.[0] || {};
+  
+  return {
+    cv_summary: data.cv_summary || '',
+    current_job_title: currentJob.job_title || '',
+    candidate_salary_expectation: data.salary_expectation || '',
+    current_notice_period: data.notice_period || '',
+    candidate_skills_summery: formatSkills(data.skills || []),
+  };
+}
 // Helper: small delay to avoid rate limits / backoff
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
