@@ -382,17 +382,8 @@ export const processCVBatch = task({
               ghlContactId,
             });
 
-            // Update with all custom fields
-            await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
-            await trackGHLCall("update_contact", batchId);
-
-            logger.info("✅ GHL custom fields updated", {
-              file: file.name,
-              ghlContactId,
-            });
-
-            // Upload CV file
-            const uploadResult = await uploadCVToGHL(
+            // Upload CV file and get URL
+            const cvFileUrl = await uploadCVToGHLCustomField(
               ghlContactId,
               file.path,
               file.name,
@@ -400,18 +391,39 @@ export const processCVBatch = task({
             );
             await trackGHLCall("upload_file", batchId);
 
-            if (!uploadResult.success) {
-              logger.warn("⚠️ CV file upload failed", {
-                file: file.name,
-                contactId: ghlContactId,
-                error: uploadResult.error,
-              });
-            } else {
-              logger.info("✅ CV file uploaded to GHL", {
-                file: file.name,
-                ghlContactId,
-              });
-            }
+            // Check for cover letter and other docs
+            const coverLetterUrl = await checkAndUploadCoverLetter(
+              batchId,
+              clientId,
+              file.name,
+              ghlContactId,
+              ghlAccessToken
+            );
+
+            const otherDocsUrl = await checkAndUploadOtherDocs(
+              batchId,
+              clientId,
+              file.name,
+              ghlContactId,
+              ghlAccessToken
+            );
+
+            // Update with all custom fields INCLUDING file URLs and system fields
+            await updateGHLContact(
+              ghlContactId,
+              parsedData,
+              candidateId,
+              cvFileUrl,
+              coverLetterUrl,
+              otherDocsUrl,
+              ghlAccessToken
+            );
+            await trackGHLCall("update_contact", batchId);
+
+            logger.info("✅ GHL custom fields updated", {
+              file: file.name,
+              ghlContactId,
+            });
 
             // Mark complete
             await updateCandidateGHL(candidateId, ghlContactId, "complete");
@@ -420,7 +432,9 @@ export const processCVBatch = task({
               file: file.name,
               candidateId,
               ghlContactId,
-              cvUploaded: uploadResult.success,
+              cvUploaded: cvFileUrl !== null,
+              coverLetterUploaded: coverLetterUrl !== null,
+              otherDocsUploaded: otherDocsUrl !== null,
             });
           } catch (ghlError: any) {
             logger.error("❌ GHL sync failed", {
@@ -646,15 +660,6 @@ async function downloadFile(filePath: string): Promise<ArrayBuffer> {
 
   return response.arrayBuffer();
 }
-
-// Continue in next file... (character limit reached)
-// ============================================
-// PROCESS CV BATCH - PART 2
-// ============================================
-// Continuation: Gemini operations, GHL operations, database operations
-
-// Import from part 1 (this will be merged into single file during deployment)
-// For now, this shows the remaining functions
 
 // ============================================
 // GEMINI OPERATIONS
@@ -1154,10 +1159,19 @@ async function createGHLContact(data: ParsedCV, accessToken: string): Promise<st
 async function updateGHLContact(
   contactId: string,
   data: ParsedCV,
+  candidateId: string,
+  cvFileUrl: string | null,
+  coverLetterUrl: string | null,
+  otherDocsUrl: string | null,
   accessToken: string
 ): Promise<void> {
-  // 🔥 USE COMPLETE FIELD MAPPING
-  const customFieldsData = buildCompleteGHLCustomFields(data);
+  const customFieldsData = buildCompleteGHLCustomFields(
+    data,
+    candidateId,
+    cvFileUrl,
+    coverLetterUrl,
+    otherDocsUrl
+  );
 
   const customFields = Object.entries(customFieldsData).map(([key, value]) => ({
     key,
@@ -1228,12 +1242,15 @@ function guessUploadMimeType(filename: string): string {
   return "application/octet-stream";
 }
 
-async function uploadCVToGHL(
+/**
+ * Upload CV file to GHL and return file URL for custom field
+ */
+async function uploadCVToGHLCustomField(
   contactId: string,
   cvFilePath: string,
   originalFilename: string,
   accessToken: string
-): Promise<{ success: boolean; fileId?: string; error?: string }> {
+): Promise<string | null> {
   try {
     const encodedPath = cvFilePath.split("/").map(encodeURIComponent).join("/");
     const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
@@ -1246,18 +1263,13 @@ async function uploadCVToGHL(
     });
 
     if (!downloadResponse.ok) {
-      const t = await downloadResponse.text();
-      throw new Error(`Failed to download CV: ${downloadResponse.status} - ${t.slice(0, 300)}`);
+      throw new Error(`Failed to download CV: ${downloadResponse.status}`);
     }
 
     const fileBuffer = await downloadResponse.arrayBuffer();
 
     const BlobCtor = (globalThis as any).Blob;
     const FormDataCtor = (globalThis as any).FormData;
-
-    if (!BlobCtor || !FormDataCtor) {
-      throw new Error("Blob/FormData not available in this runtime");
-    }
 
     const mimeType = guessUploadMimeType(originalFilename);
     const blob = new BlobCtor([fileBuffer], { type: mimeType });
@@ -1279,26 +1291,165 @@ async function uploadCVToGHL(
     }
 
     const uploadResult = await uploadResponse.json();
+    const fileUrl = uploadResult?.url || uploadResult?.fileUrl || null;
 
-    logger.info("CV uploaded to GHL successfully", {
+    logger.info("✅ CV file uploaded to GHL", {
       contactId,
+      fileUrl,
       fileId: uploadResult?.id,
     });
 
-    return {
-      success: true,
-      fileId: uploadResult?.id,
-    };
+    return fileUrl;
   } catch (error: any) {
-    logger.error("Failed to upload CV to GHL", {
+    logger.error("❌ Failed to upload CV to GHL custom field", {
       contactId,
       error: error?.message ?? String(error),
     });
+    return null;
+  }
+}
 
-    return {
-      success: false,
+/**
+ * Check for and upload cover letter if exists
+ */
+async function checkAndUploadCoverLetter(
+  batchId: string,
+  clientId: string,
+  cvFileName: string,
+  contactId: string,
+  accessToken: string
+): Promise<string | null> {
+  try {
+    const baseName = cvFileName.replace(/\.[^/.]+$/, "");
+    const possiblePaths = [
+      `${clientId}/${batchId}/cover_letters/${baseName}_cover_letter.pdf`,
+      `${clientId}/${batchId}/cover_letters/${baseName}.pdf`,
+      `${clientId}/${batchId}/cover_letters/cover_letter.pdf`,
+    ];
+
+    for (const coverLetterPath of possiblePaths) {
+      const encodedPath = encodeStoragePath(coverLetterPath);
+      const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
+
+      const downloadResponse = await fetch(downloadUrl, {
+        headers: {
+          Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+          apikey: ENV.SUPABASE_SERVICE_KEY,
+        },
+      });
+
+      if (downloadResponse.ok) {
+        const coverLetterData = await downloadResponse.arrayBuffer();
+
+        const BlobCtor = (globalThis as any).Blob;
+        const FormDataCtor = (globalThis as any).FormData;
+
+        const blob = new BlobCtor([coverLetterData], { type: "application/pdf" });
+        const formData = new FormDataCtor();
+        formData.append("file", blob, "cover_letter.pdf");
+
+        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}/files`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Version: GHL_CONFIG.API_VERSION,
+          },
+          body: formData as any,
+        });
+
+        if (uploadResponse.ok) {
+          const uploadResult = await uploadResponse.json();
+          const fileUrl = uploadResult?.url || uploadResult?.fileUrl || null;
+
+          logger.info("✅ Cover letter uploaded", {
+            contactId,
+            fileUrl,
+          });
+
+          return fileUrl;
+        }
+      }
+    }
+
+    return null;
+  } catch (error: any) {
+    logger.warn("⚠️ Failed to upload cover letter", {
+      contactId,
       error: error?.message ?? String(error),
-    };
+    });
+    return null;
+  }
+}
+
+/**
+ * Check for and upload other documents if exists
+ */
+async function checkAndUploadOtherDocs(
+  batchId: string,
+  clientId: string,
+  cvFileName: string,
+  contactId: string,
+  accessToken: string
+): Promise<string | null> {
+  try {
+    const baseName = cvFileName.replace(/\.[^/.]+$/, "");
+    const possiblePaths = [
+      `${clientId}/${batchId}/other_docs/${baseName}_application.pdf`,
+      `${clientId}/${batchId}/other_docs/${baseName}.pdf`,
+      `${clientId}/${batchId}/other_docs/application.pdf`,
+    ];
+
+    for (const docPath of possiblePaths) {
+      const encodedPath = encodeStoragePath(docPath);
+      const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
+
+      const downloadResponse = await fetch(downloadUrl, {
+        headers: {
+          Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+          apikey: ENV.SUPABASE_SERVICE_KEY,
+        },
+      });
+
+      if (downloadResponse.ok) {
+        const docData = await downloadResponse.arrayBuffer();
+
+        const BlobCtor = (globalThis as any).Blob;
+        const FormDataCtor = (globalThis as any).FormData;
+
+        const blob = new BlobCtor([docData], { type: "application/pdf" });
+        const formData = new FormDataCtor();
+        formData.append("file", blob, "application.pdf");
+
+        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}/files`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Version: GHL_CONFIG.API_VERSION,
+          },
+          body: formData as any,
+        });
+
+        if (uploadResponse.ok) {
+          const uploadResult = await uploadResponse.json();
+          const fileUrl = uploadResult?.url || uploadResult?.fileUrl || null;
+
+          logger.info("✅ Other documents uploaded", {
+            contactId,
+            fileUrl,
+          });
+
+          return fileUrl;
+        }
+      }
+    }
+
+    return null;
+  } catch (error: any) {
+    logger.warn("⚠️ Failed to upload other documents", {
+      contactId,
+      error: error?.message ?? String(error),
+    });
+    return null;
   }
 }
 
@@ -1483,8 +1634,6 @@ async function recordRejection(
   classification: ClassificationResult
 ): Promise<void> {
   try {
-    // Optional: Record rejections for analytics
-    // You could create a rejections table or just log
     logger.info("Document rejected and logged", {
       batchId,
       fileName,

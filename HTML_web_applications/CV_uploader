@@ -1242,7 +1242,7 @@
     const SUPABASE_URL = 'https://nxlzdqskcqbikzpxhjam.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54bHpkcXNrY3FiaWt6cHhoamFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTg2MTAsImV4cCI6MjA4MjQ3NDYxMH0.wYiBr5WMblMPbKfoO6HELLC5PpxYvRc0F9ITrkfjJNM';
     const STORAGE_BUCKET = 'cv-uploads';
-    const CLIENT_ID = 'demo-client-001';
+    const CLIENT_ID = '834adb2a-fe62-446b-bba3-540668481ac2';
 
     // Initialize Supabase
     const { createClient } = window.supabase;
@@ -1481,22 +1481,22 @@
 
       // ✅ UPDATED: Create batch record with job_id
       try {
-        const { error } = await supabaseClient
-          .from('processing_batches')
-          .insert({
-            id: currentBatchId,
-            client_id: null,
-            file_count: uploaded,
-            processed_count: 0,
-            status: 'pending',
-            colleague: colleague,
-            job_id: jobId // ✅ NEW: Include job_id
-          });
+  const { error } = await supabaseClient
+    .from('processing_batches')
+    .insert({
+      id: currentBatchId,
+      client_id: '834adb2a-fe62-446b-bba3-540668481ac2', // ✅ FIXED: Added quotes
+      file_count: uploaded,
+      processed_count: 0,
+      status: 'pending',
+      colleague: colleague,
+      job_id: jobId
+    });
 
-        if (error) console.error('Failed to create batch record:', error);
-      } catch (err) {
-        console.error('Batch record error:', err);
-      }
+  if (error) console.error('Failed to create batch record:', error);
+} catch (err) {
+  console.error('Batch record error:', err);
+}
 
       // Update UI
       progressTitle.textContent = 'Processing CVs...';
