@@ -7,20 +7,20 @@
 # ============================================
 # SUPABASE CONFIGURATION
 # ============================================
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.your-service-key
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.your-anon-key
+SUPABASE_URL=https://nxlzdqskcqbikzpxhjam.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54bHpkcXNrY3FiaWt6cHhoamFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2Njg5ODYxMCwiZXhwIjoyMDgyNDc0NjEwfQ.-njeH3xLs3C_ER5RlxVC5pKTvP3ztrDyV8fnvMO-t4M
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54bHpkcXNrY3FiaWt6cHhoamFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTg2MTAsImV4cCI6MjA4MjQ3NDYxMH0.wYiBr5WMblMPbKfoO6HELLC5PpxYvRc0F9ITrkfjJNM
 
 # ============================================
 # TRIGGER.DEV CONFIGURATION
 # ============================================
-TRIGGER_API_KEY=tr_dev_your-trigger-api-key
+TRIGGER_API_KEY=tr_prod_MZixjNY74XsAeIojxVO2
 TRIGGER_API_URL=https://api.trigger.dev
 
 # ============================================
 # GOOGLE GEMINI CONFIGURATION
 # ============================================
-GEMINI_API_KEY=AIzaSy...your-gemini-api-key
+GEMINI_API_KEY=AIzaSyBpm0_Wf67BtpkH_uHwDCk96lqDBuEnnt4
 
 # ============================================
 # GOHIGHLEVEL CONFIGURATION
@@ -28,15 +28,15 @@ GEMINI_API_KEY=AIzaSy...your-gemini-api-key
 # IMPORTANT: Your GHL Private Integration Token MUST have the scope:
 # - conversations/message.write (required for file uploads)
 # Regenerate your token if this scope is missing!
-GHL_PRIVATE_INTEGRATION_KEY=your-ghl-private-integration-key
-GHL_LOCATION_ID=your-ghl-location-id
+GHL_PRIVATE_INTEGRATION_KEY=pit-ad189d04-6e34-4c4e-b9d2-078bdacbdfb8
+GHL_LOCATION_ID=yg6yUX5rPvRx0kY1ian1
 
 # ============================================
 # CLIENT CONFIGURATION
 # ============================================
 # Default client UUID for this deployment
 # Each deployment should have its own CLIENT_ID
-CLIENT_ID=00000000-0000-0000-0000-000000000000
+CLIENT_ID=834adb2a-fe62-446b-bba3-540668481ac2
 
 # ============================================
 # OPTIONAL: OVERRIDE DEFAULTS
