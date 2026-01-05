@@ -3,15 +3,16 @@
 // ============================================
 // Handles manual review submissions with:
 // - Cost tracking
-// - Complete GHL field sync
+// - Complete GHL field sync with file uploads
 // - Comprehensive error handling
 // - Duplicate resolution
+// - Retry logic
 
 import { task, logger } from "@trigger.dev/sdk";
 import {
   ENV,
   PROCESSING_CONFIG,
-  SUPABASE_CONFIG,    // ← ADD THIS LINE
+  SUPABASE_CONFIG,
   GEMINI_CONFIG,
   GHL_CONFIG,
   getRetryDelay,
@@ -79,20 +80,22 @@ export const processHoldQueueItem = task({
   maxDuration: 300, // 5 minutes
   run: async (payload: { holdQueueId: string }) => {
     const { holdQueueId } = payload;
+    const correlationId = `hold_${holdQueueId}`;
 
-    logger.info("🔄 Processing hold_queue item", { holdQueueId });
+    logger.info("🔄 Processing hold_queue item", { correlationId, holdQueueId });
 
     try {
       // 1) Fetch hold queue item
       const holdItem = await fetchHoldQueueItem(holdQueueId);
 
       if (!holdItem) {
-        logger.error("Hold queue item not found", { holdQueueId });
+        logger.error("Hold queue item not found", { correlationId, holdQueueId });
         return { success: false, error: "Item not found" };
       }
 
       if (holdItem.status !== "ready_for_processing") {
         logger.warn("Hold queue item not ready", {
+          correlationId,
           holdQueueId,
           status: holdItem.status,
         });
@@ -100,6 +103,7 @@ export const processHoldQueueItem = task({
       }
 
       logger.info("Hold queue item retrieved", {
+        correlationId,
         holdQueueId,
         fileName: holdItem.file_name,
         reason: holdItem.extraction_data?.reason,
@@ -109,11 +113,12 @@ export const processHoldQueueItem = task({
       let parsedData: ParsedCV;
 
       if (holdItem.cv_raw_text && holdItem.cv_raw_text.trim().length > 50) {
-        logger.info("Running full parse on raw text");
+        logger.info("Running full parse on raw text", { correlationId });
         parsedData = await fullParse(holdItem.cv_raw_text);
+        parsedData.cv_raw_text = holdItem.cv_raw_text;
         await trackFullParse(holdItem.batch_id);
       } else {
-        logger.warn("No raw text available, using empty CV");
+        logger.warn("No raw text available, using empty CV", { correlationId });
         parsedData = getEmptyParsedCV();
       }
 
@@ -125,6 +130,7 @@ export const processHoldQueueItem = task({
       parsedData.phone = manualInfo.phone || parsedData.phone;
 
       logger.info("Final candidate data", {
+        correlationId,
         full_name: parsedData.full_name,
         email: parsedData.email,
         phone: parsedData.phone,
@@ -138,6 +144,7 @@ export const processHoldQueueItem = task({
         shouldUpdate = true;
         existingCandidateId = holdItem.duplicate_candidate_id;
         logger.info("Marked to update existing candidate", {
+          correlationId,
           existingCandidateId,
         });
       } else if (!holdItem.ignore_duplicate) {
@@ -145,7 +152,7 @@ export const processHoldQueueItem = task({
         if (duplicate) {
           shouldUpdate = true;
           existingCandidateId = duplicate.id;
-          logger.info("Found existing candidate", { existingCandidateId });
+          logger.info("Found existing candidate", { correlationId, existingCandidateId });
         }
       }
 
@@ -154,6 +161,7 @@ export const processHoldQueueItem = task({
       if (holdItem.extraction_data?.ghl_duplicate_contact_id) {
         ghlContactIdToUpdate = holdItem.extraction_data.ghl_duplicate_contact_id;
         logger.info("GHL duplicate detected - will update existing contact", {
+          correlationId,
           ghlContactId: ghlContactIdToUpdate,
         });
       }
@@ -165,23 +173,28 @@ export const processHoldQueueItem = task({
         await updateCandidate(existingCandidateId, {
           ...parsedData,
           cv_file_path: holdItem.cv_file_path,
-          cv_raw_text: holdItem.cv_raw_text,
           batch_id: holdItem.batch_id,
           status: "pending_ghl_sync",
+          is_update: true,
         });
         candidateId = existingCandidateId;
-        logger.info("✅ Updated existing candidate in Supabase", { candidateId });
+        logger.info("✅ Updated existing candidate in Supabase", {
+          correlationId,
+          candidateId,
+        });
       } else {
         candidateId = await writeCandidate({
           ...parsedData,
           client_id: holdItem.client_id || null,
           ghl_contact_id: null,
           cv_file_path: holdItem.cv_file_path,
-          cv_raw_text: holdItem.cv_raw_text,
           batch_id: holdItem.batch_id,
           status: "pending_ghl_sync",
         });
-        logger.info("✅ Created new candidate in Supabase", { candidateId });
+        logger.info("✅ Created new candidate in Supabase", {
+          correlationId,
+          candidateId,
+        });
       }
 
       // 7) Sync to GHL
@@ -192,11 +205,6 @@ export const processHoldQueueItem = task({
         // If we already have a GHL contact ID from duplicate detection, use it
         if (ghlContactIdToUpdate) {
           ghlContactId = ghlContactIdToUpdate;
-          await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
-          await trackGHLCall("update_contact", holdItem.batch_id);
-          logger.info("✅ Updated existing GHL contact (from duplicate detection)", {
-            ghlContactId,
-          });
         } else {
           // Otherwise, search for existing contact
           const existingContactId = await findExistingGHLContact(
@@ -208,40 +216,127 @@ export const processHoldQueueItem = task({
 
           if (existingContactId) {
             ghlContactId = existingContactId;
-            await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
-            await trackGHLCall("update_contact", holdItem.batch_id);
-            logger.info("✅ Updated existing GHL contact", { ghlContactId });
+            logger.info("Found existing GHL contact", {
+              correlationId,
+              ghlContactId,
+            });
           } else {
             ghlContactId = await createGHLContact(parsedData, ghlAccessToken);
             await trackGHLCall("create_contact", holdItem.batch_id);
-            await updateGHLContact(ghlContactId, parsedData, ghlAccessToken);
-            await trackGHLCall("update_contact", holdItem.batch_id);
-            logger.info("✅ Created new GHL contact", { ghlContactId });
-          }
-        }
-
-        // Upload CV file
-        if (ghlContactId) {
-          const uploadResult = await uploadCVToGHL(
-            ghlContactId,
-            holdItem.cv_file_path,
-            holdItem.file_name,
-            ghlAccessToken
-          );
-          await trackGHLCall("upload_file", holdItem.batch_id);
-
-          if (!uploadResult.success) {
-            logger.warn("⚠️ CV file upload failed", {
+            logger.info("✅ Created new GHL contact", {
+              correlationId,
               ghlContactId,
-              error: uploadResult.error,
             });
           }
         }
 
+        // Upload CV file to GHL
+        let cvFileUrl: string | null = null;
+        if (ghlContactId && holdItem.cv_file_path) {
+          const cvUploadResult = await uploadCVToGHL(
+            ghlContactId,
+            holdItem.cv_file_path,
+            holdItem.file_name || "cv.pdf",
+            ghlAccessToken
+          );
+          await trackGHLCall("upload_file", holdItem.batch_id);
+
+          cvFileUrl = cvUploadResult.fileUrl || null;
+
+          if (!cvUploadResult.success) {
+            logger.warn("⚠️ CV file upload failed", {
+              correlationId,
+              ghlContactId,
+              error: cvUploadResult.error,
+            });
+          } else {
+            logger.info("✅ CV file uploaded to GHL", {
+              correlationId,
+              ghlContactId,
+              fileUrl: cvFileUrl,
+            });
+          }
+        }
+
+        // Upload cover letter (if exists)
+        let coverLetterUrl: string | null = null;
+        if (ghlContactId && holdItem.cv_file_path) {
+          try {
+            coverLetterUrl = await uploadCoverLetterToGHL(
+              ghlContactId,
+              holdItem.cv_file_path,
+              ghlAccessToken
+            );
+            if (coverLetterUrl) {
+              await trackGHLCall("upload_file", holdItem.batch_id);
+              logger.info("✅ Cover letter uploaded", {
+                correlationId,
+                ghlContactId,
+                fileUrl: coverLetterUrl,
+              });
+            }
+          } catch (clError: any) {
+            logger.warn("⚠️ Cover letter upload failed", {
+              correlationId,
+              error: clError.message,
+            });
+          }
+        }
+
+        // Upload other documents (if exists)
+        let otherDocsUrl: string | null = null;
+        if (ghlContactId && holdItem.cv_file_path) {
+          try {
+            otherDocsUrl = await uploadOtherDocsToGHL(
+              ghlContactId,
+              holdItem.cv_file_path,
+              ghlAccessToken
+            );
+            if (otherDocsUrl) {
+              await trackGHLCall("upload_file", holdItem.batch_id);
+              logger.info("✅ Other documents uploaded", {
+                correlationId,
+                ghlContactId,
+                fileUrl: otherDocsUrl,
+              });
+            }
+          } catch (odError: any) {
+            logger.warn("⚠️ Other documents upload failed", {
+              correlationId,
+              error: odError.message,
+            });
+          }
+        }
+
+        // Update GHL contact with all fields + file URLs
+        await updateGHLContact(
+          ghlContactId,
+          parsedData,
+          candidateId,
+          cvFileUrl,
+          coverLetterUrl,
+          otherDocsUrl,
+          ghlAccessToken
+        );
+        await trackGHLCall("update_contact", holdItem.batch_id);
+
+        logger.info("✅ GHL contact updated with full data", {
+          correlationId,
+          ghlContactId,
+          cvUploaded: !!cvFileUrl,
+          coverLetterUploaded: !!coverLetterUrl,
+          otherDocsUploaded: !!otherDocsUrl,
+        });
+
         await updateCandidateGHL(candidateId, ghlContactId, "complete");
-        logger.info("✅ GHL sync successful", { candidateId, ghlContactId });
+        logger.info("✅ GHL sync successful", {
+          correlationId,
+          candidateId,
+          ghlContactId,
+        });
       } catch (ghlError: any) {
         logger.error("❌ GHL sync failed", {
+          correlationId,
           error: ghlError.message,
           stack: ghlError.stack,
           candidateId,
@@ -252,33 +347,29 @@ export const processHoldQueueItem = task({
 
       // 8) Mark hold queue item as complete
       await updateHoldQueueStatus(holdQueueId, "complete", candidateId);
-      logger.info("✅ Hold queue item processed successfully", {
+
+      logger.info("✅ Hold queue item processing complete", {
+        correlationId,
         holdQueueId,
         candidateId,
+        ghlContactId,
       });
 
-      // 9) Log batch cost summary
-      if (holdItem.batch_id) {
-        await logBatchCostSummary(holdItem.batch_id);
-      }
-
-      return { success: true, candidateId, ghlContactId };
+      return {
+        success: true,
+        candidateId,
+        ghlContactId,
+      };
     } catch (error: any) {
       logger.error("❌ Hold queue processing failed", {
+        correlationId,
         holdQueueId,
         error: error.message,
         stack: error.stack,
       });
 
-      // Mark as failed
-      try {
-        await updateHoldQueueStatus(holdQueueId, "failed", null);
-      } catch (updateError) {
-        logger.error("Failed to update hold queue status", {
-          holdQueueId,
-          error: updateError,
-        });
-      }
+      // Mark as failed but don't delete (allow retry)
+      await updateHoldQueueStatus(holdQueueId, "pending", null, error.message);
 
       throw error;
     }
@@ -286,142 +377,7 @@ export const processHoldQueueItem = task({
 });
 
 // ============================================
-// DATABASE OPERATIONS
-// ============================================
-
-async function fetchHoldQueueItem(holdQueueId: string): Promise<any> {
-  const response = await fetch(
-    `${ENV.SUPABASE_URL}/rest/v1/hold_queue?id=eq.${holdQueueId}`,
-    {
-      headers: {
-        Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
-        apikey: ENV.SUPABASE_SERVICE_KEY,
-      },
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to fetch hold_queue item: ${errorText}`);
-  }
-
-  const result = await response.json();
-  return result[0] || null;
-}
-
-async function findExistingCandidate(
-  email: string | null,
-  phone: string | null
-): Promise<any> {
-  if (!email && !phone) return null;
-
-  let url = `${ENV.SUPABASE_URL}/rest/v1/candidates?`;
-
-  if (email && phone) {
-    url += `or=(email.eq.${encodeURIComponent(email)},phone.eq.${encodeURIComponent(phone)})`;
-  } else if (email) {
-    url += `email=eq.${encodeURIComponent(email)}`;
-  } else if (phone) {
-    url += `phone=eq.${encodeURIComponent(phone)}`;
-  }
-
-  url += "&limit=1";
-
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
-      apikey: ENV.SUPABASE_SERVICE_KEY,
-    },
-  });
-
-  if (!response.ok) return null;
-
-  const result = await response.json();
-  return result[0] || null;
-}
-
-async function writeCandidate(candidateData: any): Promise<string> {
-  const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/candidates`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
-      apikey: ENV.SUPABASE_SERVICE_KEY,
-      "Content-Type": "application/json",
-      Prefer: "return=representation",
-    },
-    body: JSON.stringify(candidateData),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to write candidate: ${errorText.slice(0, 800)}`);
-  }
-
-  const result = await response.json();
-  return result[0]?.id;
-}
-
-async function updateCandidate(candidateId: string, updates: any): Promise<void> {
-  await fetch(`${ENV.SUPABASE_URL}/rest/v1/candidates?id=eq.${candidateId}`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
-      apikey: ENV.SUPABASE_SERVICE_KEY,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify(updates),
-  });
-}
-
-async function updateCandidateGHL(
-  candidateId: string,
-  ghlContactId: string | null,
-  status: string
-): Promise<void> {
-  await fetch(`${ENV.SUPABASE_URL}/rest/v1/candidates?id=eq.${candidateId}`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
-      apikey: ENV.SUPABASE_SERVICE_KEY,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify({
-      ghl_contact_id: ghlContactId,
-      status: status,
-    }),
-  });
-}
-
-async function updateHoldQueueStatus(
-  holdQueueId: string,
-  status: string,
-  candidateId?: string | null
-): Promise<void> {
-  const updates: any = {
-    status,
-    processed_at: new Date().toISOString(),
-  };
-
-  if (candidateId) {
-    updates.existing_candidate_id = candidateId;
-  }
-
-  await fetch(`${ENV.SUPABASE_URL}/rest/v1/hold_queue?id=eq.${holdQueueId}`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
-      apikey: ENV.SUPABASE_SERVICE_KEY,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify(updates),
-  });
-}
-
-// ============================================
-// GEMINI OPERATIONS
+// GEMINI API - FULL PARSE
 // ============================================
 
 function stripJsonFences(s: string): string {
@@ -432,119 +388,120 @@ function stripJsonFences(s: string): string {
   return t;
 }
 
-async function geminiGenerateText(args: {
-  parts: any[];
-  responseMimeType?: string;
-  temperature?: number;
-}): Promise<string> {
-  const url = `${GEMINI_CONFIG.BASE_URL}/models/${GEMINI_CONFIG.MODEL}:generateContent?key=${ENV.GEMINI_API_KEY}`;
-  const maxAttempts = GEMINI_CONFIG.MAX_RETRIES;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: args.parts }],
-          generationConfig: {
-            temperature: args.temperature ?? 0,
-            ...(args.responseMimeType ? { responseMimeType: args.responseMimeType } : {}),
-          },
-        }),
-      });
-
-      const bodyText = await response.text();
-
-      if (response.ok) {
-        let data: any;
-        try {
-          data = JSON.parse(bodyText);
-        } catch {
-          throw new Error("Gemini returned non-JSON envelope");
-        }
-
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-        return typeof text === "string" ? text : "";
-      }
-
-      const status = response.status;
-      const retryable = isRetryableStatus(status, GEMINI_CONFIG.RETRYABLE_STATUS_CODES);
-
-      if (!retryable || attempt === maxAttempts) {
-        throw new Error(`Gemini request failed (status ${status}): ${bodyText.slice(0, 500)}`);
-      }
-
-      const waitMs = getRetryDelay(attempt, GEMINI_CONFIG);
-      await delay(waitMs);
-    } catch (error: any) {
-      if (attempt === maxAttempts) {
-        throw error;
-      }
-      const waitMs = getRetryDelay(attempt, GEMINI_CONFIG);
-      await delay(waitMs);
-    }
-  }
-
-  throw new Error("Gemini request failed after retries");
-}
-
 async function fullParse(rawText: string): Promise<ParsedCV> {
-  const output = await geminiGenerateText({
-    parts: [
-      {
-        text: `Extract all information from this CV and return as JSON. Include these fields:
+  const sampleText = rawText.substring(0, PROCESSING_CONFIG.MAX_TEXT_LENGTH_FOR_PARSE);
+
+  const prompt = `Extract ALL structured data from this CV/resume. Return ONLY valid JSON in this exact format:
+
 {
   "full_name": "string or null",
   "email": "string or null",
   "phone": "string or null",
   "address": "string or null",
   "linkedin_url": "string or null",
-  "date_of_birth": "string or null",
+  "date_of_birth": "YYYY-MM-DD or null",
   "nationality": "string or null",
   "visa_work_permit": "string or null",
   "professional_summary": "string or null",
   "future_job_aspirations": "string or null",
-  "work_history": [{"job_title": "", "company_name": "", "company_location": "", "start_date": "", "end_date": "", "employment_type": "", "duties_responsibilities": "", "achievements": "", "reason_for_leaving": ""}],
-  "education": [{"qualification_name": "", "institution_name": "", "start_date": "", "end_date": "", "grade_classification": "", "dissertation_thesis": "", "honours_awards": "", "extracurricular": ""}],
-  "skills": ["skill1", "skill2"],
-  "certifications": [{"name": "", "issuing_organisation": "", "date_obtained": "", "expiry_date": "", "certification_id": ""}],
+  "work_history": [
+    {
+      "job_title": "string",
+      "company_name": "string",
+      "company_location": "string or null",
+      "start_date": "string",
+      "end_date": "string or Present",
+      "employment_type": "string or null",
+      "duties_responsibilities": "string or null",
+      "achievements": "string or null",
+      "reason_for_leaving": "string or null"
+    }
+  ],
+  "education": [
+    {
+      "qualification_name": "string",
+      "institution_name": "string",
+      "start_date": "string or null",
+      "end_date": "string or null",
+      "grade_classification": "string or null",
+      "honours_awards": "string or null",
+      "dissertation_thesis": "string or null",
+      "extracurricular": "string or null"
+    }
+  ],
+  "skills": ["string"],
+  "certifications": [
+    {
+      "name": "string",
+      "issuing_organisation": "string or null",
+      "date_obtained": "string or null",
+      "expiry_date": "string or null",
+      "certification_id": "string or null"
+    }
+  ],
   "driving_licence": "string or null",
-  "languages": [{"language": "", "proficiency": "", "reading": "", "writing": "", "speaking": "", "certifications": ""}],
-  "training_courses": [{"course_name": "", "provider": "", "date_completed": "", "duration": "", "format": "", "accreditation": ""}],
-  "professional_memberships": [{"organisation_name": "", "membership_type": "", "member_since": "", "member_number": ""}],
-  "awards_honours": [],
-  "volunteering": [],
-  "interests_hobbies": [],
-  "candidate_references": [],
+  "languages": [
+    {
+      "language": "string",
+      "proficiency": "string or null",
+      "reading": "string or null",
+      "writing": "string or null",
+      "speaking": "string or null",
+      "certifications": "string or null"
+    }
+  ],
+  "training_courses": ["string"],
+  "professional_memberships": ["string"],
+  "awards_honours": ["string"],
+  "volunteering": ["string"],
+  "interests_hobbies": ["string"],
+  "candidate_references": ["string"],
   "military_service": "string or null",
   "salary_expectation": "string or null",
   "notice_period": "string or null",
-  "availability_start_date": "string or null",
+  "availability_start_date": "YYYY-MM-DD or null",
   "relocation_willingness": "string or null",
   "remote_work_preference": "string or null",
-  "cv_summary": "2-3 sentence summary of the candidate for matching purposes"
+  "cv_summary": "string or null"
 }
 
-Return ONLY valid JSON, no other text.
-
 CV Text:
-${rawText.substring(0, PROCESSING_CONFIG.MAX_TEXT_LENGTH_FOR_PARSE)}`,
+${sampleText}
+
+Return ONLY the JSON object, no other text.`;
+
+  const url = `${GEMINI_CONFIG.BASE_URL}/models/${GEMINI_CONFIG.MODEL}:generateContent?key=${ENV.GEMINI_API_KEY}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json",
       },
-    ],
-    responseMimeType: "application/json",
-    temperature: 0,
+    }),
   });
 
-  await delay(PROCESSING_CONFIG.DELAY_AFTER_GEMINI_CALL_MS);
+  if (!response.ok) {
+    const txt = await response.text();
+    throw new Error(`Gemini full parse failed: ${txt.slice(0, 500)}`);
+  }
 
-  const cleaned = stripJsonFences(output);
+  const data = await response.json();
+  const rawOutput = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+  const cleaned = stripJsonFences(rawOutput);
 
   try {
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    return {
+      ...getEmptyParsedCV(),
+      ...parsed,
+    };
   } catch {
-    logger.error("Failed to parse Gemini output", {
-      preview: cleaned.slice(0, 600),
+    logger.error("Failed to parse Gemini full parse output", {
+      outputPreview: cleaned.slice(0, 1000),
     });
     return getEmptyParsedCV();
   }
@@ -582,6 +539,58 @@ function getEmptyParsedCV(): ParsedCV {
     remote_work_preference: null,
     cv_summary: null,
   };
+}
+
+// ============================================
+// DUPLICATE DETECTION
+// ============================================
+
+async function findExistingCandidate(
+  email: string | null,
+  phone: string | null
+): Promise<{ id: string } | null> {
+  if (email && isValidEmail(email)) {
+    const response = await fetch(
+      `${ENV.SUPABASE_URL}/rest/v1/candidates?email=eq.${encodeURIComponent(email)}&select=id&limit=1`,
+      {
+        headers: {
+          Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+          apikey: ENV.SUPABASE_SERVICE_KEY,
+        },
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.length > 0) {
+        return data[0];
+      }
+    }
+  }
+
+  if (phone) {
+    const normalized = normalizePhone(phone);
+    if (normalized) {
+      const response = await fetch(
+        `${ENV.SUPABASE_URL}/rest/v1/candidates?phone=eq.${encodeURIComponent(normalized)}&select=id&limit=1`,
+        {
+          headers: {
+            Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+            apikey: ENV.SUPABASE_SERVICE_KEY,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.length > 0) {
+          return data[0];
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 // ============================================
@@ -714,9 +723,19 @@ async function createGHLContact(data: ParsedCV, accessToken: string): Promise<st
 async function updateGHLContact(
   contactId: string,
   data: ParsedCV,
+  candidateId: string,
+  cvFileUrl: string | null,
+  coverLetterUrl: string | null,
+  otherDocsUrl: string | null,
   accessToken: string
 ): Promise<void> {
-  const customFieldsData = buildCompleteGHLCustomFields(data);
+  const customFieldsData = buildCompleteGHLCustomFields(
+    data,
+    candidateId,
+    cvFileUrl,
+    coverLetterUrl,
+    otherDocsUrl
+  );
 
   const customFields = Object.entries(customFieldsData).map(([key, value]) => ({
     key,
@@ -739,6 +758,10 @@ async function updateGHLContact(
   }
 }
 
+// ============================================
+// GHL FILE UPLOADS
+// ============================================
+
 function guessUploadMimeType(filename: string): string {
   const ext = filename.split(".").pop()?.toLowerCase();
   if (ext === "pdf") return "application/pdf";
@@ -749,14 +772,18 @@ function guessUploadMimeType(filename: string): string {
   return "application/octet-stream";
 }
 
+function encodeStoragePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
 async function uploadCVToGHL(
   contactId: string,
   cvFilePath: string,
   originalFilename: string,
   accessToken: string
-): Promise<{ success: boolean; fileId?: string; error?: string }> {
+): Promise<{ success: boolean; fileUrl?: string; error?: string }> {
   try {
-    const encodedPath = cvFilePath.split("/").map(encodeURIComponent).join("/");
+    const encodedPath = encodeStoragePath(cvFilePath);
     const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
 
     const downloadResponse = await fetch(downloadUrl, {
@@ -784,18 +811,16 @@ async function uploadCVToGHL(
     const blob = new BlobCtor([fileBuffer], { type: mimeType });
     const formData = new FormDataCtor();
     formData.append("file", blob, originalFilename);
+    formData.append("name", originalFilename);
 
-    const uploadResponse = await fetch(
-      `${GHL_CONFIG.BASE_URL}/contacts/${contactId}/files`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Version: GHL_CONFIG.API_VERSION,
-        },
-        body: formData as any,
-      }
-    );
+    const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/medias/upload-file`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Version: GHL_CONFIG.API_VERSION,
+      },
+      body: formData as any,
+    });
 
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
@@ -805,10 +830,11 @@ async function uploadCVToGHL(
     }
 
     const uploadResult = await uploadResponse.json();
+    const fileUrl = uploadResult?.url || uploadResult?.fileUrl || uploadResult?.publicUrl || null;
 
     return {
       success: true,
-      fileId: uploadResult?.id,
+      fileUrl,
     };
   } catch (error: any) {
     logger.error("Failed to upload CV to GHL", {
@@ -820,5 +846,289 @@ async function uploadCVToGHL(
       success: false,
       error: error?.message ?? String(error),
     };
+  }
+}
+
+async function uploadCoverLetterToGHL(
+  contactId: string,
+  cvFilePath: string,
+  accessToken: string
+): Promise<string | null> {
+  try {
+    const pathParts = cvFilePath.split("/");
+    const fileName = pathParts[pathParts.length - 1];
+    const baseName = fileName.replace(/\.(pdf|docx?|txt)$/i, "");
+    const clientId = pathParts[0];
+    const batchId = pathParts[1];
+
+    const possiblePaths = [
+      `${clientId}/${batchId}/cover_letters/${baseName}_cover_letter.pdf`,
+      `${clientId}/${batchId}/cover_letters/${baseName}.pdf`,
+      `${clientId}/${batchId}/cover_letters/cover_letter.pdf`,
+      `${clientId}/${batchId}/cover_letter/${baseName}_cover_letter.pdf`,
+      `${clientId}/${batchId}/coverletter/${baseName}_cover_letter.pdf`,
+    ];
+
+    for (const clPath of possiblePaths) {
+      const encodedPath = encodeStoragePath(clPath);
+      const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
+
+      const downloadResponse = await fetch(downloadUrl, {
+        headers: {
+          Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+          apikey: ENV.SUPABASE_SERVICE_KEY,
+        },
+      });
+
+      if (downloadResponse.ok) {
+        const clData = await downloadResponse.arrayBuffer();
+
+        const BlobCtor = (globalThis as any).Blob;
+        const FormDataCtor = (globalThis as any).FormData;
+
+        const blob = new BlobCtor([clData], { type: "application/pdf" });
+        const formData = new FormDataCtor();
+        formData.append("file", blob, "cover_letter.pdf");
+        formData.append("name", "cover_letter.pdf");
+
+        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/medias/upload-file`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Version: GHL_CONFIG.API_VERSION,
+          },
+          body: formData as any,
+        });
+
+        if (uploadResponse.ok) {
+          const uploadResult = await uploadResponse.json();
+          return uploadResult?.url || uploadResult?.fileUrl || uploadResult?.publicUrl || null;
+        }
+      }
+    }
+
+    return null;
+  } catch (error: any) {
+    logger.warn("⚠️ Failed to upload cover letter", {
+      contactId,
+      error: error?.message ?? String(error),
+    });
+    return null;
+  }
+}
+
+async function uploadOtherDocsToGHL(
+  contactId: string,
+  cvFilePath: string,
+  accessToken: string
+): Promise<string | null> {
+  try {
+    const pathParts = cvFilePath.split("/");
+    const fileName = pathParts[pathParts.length - 1];
+    const baseName = fileName.replace(/\.(pdf|docx?|txt)$/i, "");
+    const clientId = pathParts[0];
+    const batchId = pathParts[1];
+
+    const possiblePaths = [
+      `${clientId}/${batchId}/other_docs/${baseName}_application.pdf`,
+      `${clientId}/${batchId}/other_docs/${baseName}.pdf`,
+      `${clientId}/${batchId}/other_docs/application.pdf`,
+      `${clientId}/${batchId}/other_documents/${baseName}_application.pdf`,
+      `${clientId}/${batchId}/application/${baseName}_application.pdf`,
+    ];
+
+    for (const docPath of possiblePaths) {
+      const encodedPath = encodeStoragePath(docPath);
+      const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
+
+      const downloadResponse = await fetch(downloadUrl, {
+        headers: {
+          Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+          apikey: ENV.SUPABASE_SERVICE_KEY,
+        },
+      });
+
+      if (downloadResponse.ok) {
+        const docData = await downloadResponse.arrayBuffer();
+
+        const BlobCtor = (globalThis as any).Blob;
+        const FormDataCtor = (globalThis as any).FormData;
+
+        const blob = new BlobCtor([docData], { type: "application/pdf" });
+        const formData = new FormDataCtor();
+        formData.append("file", blob, "application.pdf");
+        formData.append("name", "application.pdf");
+
+        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/medias/upload-file`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Version: GHL_CONFIG.API_VERSION,
+          },
+          body: formData as any,
+        });
+
+        if (uploadResponse.ok) {
+          const uploadResult = await uploadResponse.json();
+          return uploadResult?.url || uploadResult?.fileUrl || uploadResult?.publicUrl || null;
+        }
+      }
+    }
+
+    return null;
+  } catch (error: any) {
+    logger.warn("⚠️ Failed to upload other documents", {
+      contactId,
+      error: error?.message ?? String(error),
+    });
+    return null;
+  }
+}
+
+// ============================================
+// DATABASE OPERATIONS
+// ============================================
+
+async function fetchHoldQueueItem(holdQueueId: string): Promise<any> {
+  const response = await fetch(
+    `${ENV.SUPABASE_URL}/rest/v1/hold_queue?id=eq.${holdQueueId}&select=*&limit=1`,
+    {
+      headers: {
+        Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+        apikey: ENV.SUPABASE_SERVICE_KEY,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch hold queue item: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data[0] || null;
+}
+
+async function writeCandidate(candidateData: any): Promise<string> {
+  const maxAttempts = SUPABASE_CONFIG.MAX_RETRIES;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/candidates`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+          apikey: ENV.SUPABASE_SERVICE_KEY,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify(candidateData),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const id = result?.[0]?.id;
+        if (!id) throw new Error("Candidate insert succeeded but no id returned");
+        return id;
+      }
+
+      const errorText = await response.text();
+
+      if (attempt === maxAttempts) {
+        throw new Error(`Failed to write candidate: ${errorText.slice(0, 800)}`);
+      }
+
+      logger.warn("Retrying candidate insert", { attempt });
+      await delay(getRetryDelay(attempt, SUPABASE_CONFIG));
+    } catch (error: any) {
+      if (attempt === maxAttempts) {
+        throw error;
+      }
+      logger.warn("Candidate insert exception", {
+        attempt,
+        error: error.message,
+      });
+      await delay(getRetryDelay(attempt, SUPABASE_CONFIG));
+    }
+  }
+
+  throw new Error("Failed to write candidate after retries");
+}
+
+async function updateCandidate(candidateId: string, updateData: any): Promise<void> {
+  const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/candidates?id=eq.${candidateId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+      apikey: ENV.SUPABASE_SERVICE_KEY,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(updateData),
+  });
+
+  if (!response.ok) {
+    const t = await response.text();
+    throw new Error(`Failed to update candidate: ${t.slice(0, 800)}`);
+  }
+}
+
+async function updateCandidateGHL(
+  candidateId: string,
+  ghlContactId: string | null,
+  status: string
+): Promise<void> {
+  const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/candidates?id=eq.${candidateId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+      apikey: ENV.SUPABASE_SERVICE_KEY,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({
+      ghl_contact_id: ghlContactId,
+      status: status,
+    }),
+  });
+
+  if (!response.ok) {
+    const t = await response.text();
+    throw new Error(`Failed to update candidate GHL/status: ${t.slice(0, 800)}`);
+  }
+}
+
+async function updateHoldQueueStatus(
+  holdQueueId: string,
+  status: string,
+  candidateId: string | null,
+  errorMessage?: string
+): Promise<void> {
+  const updateData: any = {
+    status,
+    processed_at: new Date().toISOString(),
+  };
+
+  if (candidateId) {
+    updateData.existing_candidate_id = candidateId;
+  }
+
+  if (errorMessage) {
+    updateData.processing_error = errorMessage;
+  }
+
+  const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/hold_queue?id=eq.${holdQueueId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+      apikey: ENV.SUPABASE_SERVICE_KEY,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(updateData),
+  });
+
+  if (!response.ok) {
+    const t = await response.text();
+    throw new Error(`Failed to update hold queue status: ${t.slice(0, 800)}`);
   }
 }

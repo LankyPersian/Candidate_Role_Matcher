@@ -2,7 +2,7 @@
 // HEXONA CV PROCESSOR - CONFIGURATION
 // ============================================
 // Centralized configuration for all system components
-// Last Updated: January 4, 2026
+// Last Updated: January 5, 2026 - PRODUCTION READY
 
 // ============================================
 // ENVIRONMENT VARIABLES (loaded from Trigger.dev)
@@ -141,6 +141,10 @@ export const CLASSIFICATION_CONFIG = {
 // PROCESSING CONFIGURATION
 // ============================================
 export const PROCESSING_CONFIG = {
+  // Batch limits
+  MAX_BATCH_SIZE: 500, // Maximum files per batch
+  MAX_BATCH_DURATION_MINUTES: 60, // Timeout threshold
+  
   // Delays between operations (to manage rate limits)
   DELAY_BETWEEN_FILES_MS: 100,
   DELAY_AFTER_GEMINI_CALL_MS: 1500,
@@ -164,8 +168,10 @@ export const PROCESSING_CONFIG = {
   AUTO_HOLD_ON_DUPLICATE: true,
   
   // Batch management
-  MAX_BATCH_DURATION_MINUTES: 60,
   BATCH_STATUS_CHECK_INTERVAL_MS: 2000,
+  
+  // Error handling
+  CONTINUE_ON_FILE_ERROR: true, // Don't fail entire batch on single file error
 } as const;
 
 // ============================================
@@ -287,6 +293,10 @@ export const VALIDATION_RULES = {
   // CV validation
   MIN_CV_WORDS: 50,
   MIN_CV_CHARACTERS: 200,
+  
+  // Phone length
+  MIN_PHONE_LENGTH: 10,
+  MAX_PHONE_LENGTH: 15,
 } as const;
 
 // ============================================
@@ -375,12 +385,6 @@ export function normalizePhone(phone: string | null | undefined): string | null 
   
   return cleaned;
 }
-
-// Add missing validation rules
-Object.assign(VALIDATION_RULES, {
-  MIN_PHONE_LENGTH: 10,
-  MAX_PHONE_LENGTH: 15,
-});
 
 /**
  * Generate unique batch ID
