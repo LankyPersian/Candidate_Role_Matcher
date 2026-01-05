@@ -409,8 +409,8 @@ export function buildCompleteGHLCustomFields(
     fields.database_record_id = candidateId;
   }
 
-  // Client or Candidate - always "Candidate" for CV uploads
-  fields.client_or_candidate = "Candidate";
+  // Client or Candidate - checkbox, always "true" for CV uploads (FIXED!)
+  fields.client_or_candidate = "true";
 
   // ============================================
   // 🔥 FILE UPLOAD FIELDS

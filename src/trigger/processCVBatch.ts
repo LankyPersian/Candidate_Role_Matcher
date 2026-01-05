@@ -1,5 +1,5 @@
 // ============================================
-// PROCESS CV BATCH - PRODUCTION VERSION
+// PROCESS CV BATCH - PRODUCTION VERSION (CORRECTED)
 // ============================================
 // Complete CV processing pipeline with:
 // - Document classification (reject non-CVs)
@@ -9,6 +9,7 @@
 // - Duplicate detection (Supabase + GHL)
 // - Hold queue management
 // - Batch recovery
+// - FIXED: GHL media upload endpoints
 
 import { task, logger } from "@trigger.dev/sdk";
 import { Buffer } from "buffer";
@@ -1243,7 +1244,8 @@ function guessUploadMimeType(filename: string): string {
 }
 
 /**
- * Upload CV file to GHL and return file URL for custom field
+ * Upload CV file to GHL media library and return file URL for custom field
+ * FIXED: Now uses correct /medias/upload-file endpoint
  */
 async function uploadCVToGHLCustomField(
   contactId: string,
@@ -1252,6 +1254,7 @@ async function uploadCVToGHLCustomField(
   accessToken: string
 ): Promise<string | null> {
   try {
+    // 1. Download from Supabase
     const encodedPath = cvFilePath.split("/").map(encodeURIComponent).join("/");
     const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
 
@@ -1268,6 +1271,7 @@ async function uploadCVToGHLCustomField(
 
     const fileBuffer = await downloadResponse.arrayBuffer();
 
+    // 2. Prepare FormData for GHL
     const BlobCtor = (globalThis as any).Blob;
     const FormDataCtor = (globalThis as any).FormData;
 
@@ -1275,8 +1279,10 @@ async function uploadCVToGHLCustomField(
     const blob = new BlobCtor([fileBuffer], { type: mimeType });
     const formData = new FormDataCtor();
     formData.append("file", blob, originalFilename);
+    formData.append("name", originalFilename); // FIXED: Added name field
 
-    const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}/files`, {
+    // 3. Upload to GHL Media Library (FIXED: Correct endpoint)
+    const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/medias/upload-file`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -1287,11 +1293,21 @@ async function uploadCVToGHLCustomField(
 
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      throw new Error(`GHL upload failed: ${uploadResponse.status} - ${errorText.slice(0, 800)}`);
+      throw new Error(`GHL media upload failed: ${uploadResponse.status} - ${errorText.slice(0, 800)}`);
     }
 
     const uploadResult = await uploadResponse.json();
-    const fileUrl = uploadResult?.url || uploadResult?.fileUrl || null;
+    
+    // FIXED: Added publicUrl to fallback chain
+    const fileUrl = uploadResult?.url || uploadResult?.fileUrl || uploadResult?.publicUrl || null;
+
+    if (!fileUrl) {
+      logger.warn("⚠️ File uploaded but no URL returned", {
+        contactId,
+        response: JSON.stringify(uploadResult).slice(0, 500),
+      });
+      return null;
+    }
 
     logger.info("✅ CV file uploaded to GHL", {
       contactId,
@@ -1301,9 +1317,11 @@ async function uploadCVToGHLCustomField(
 
     return fileUrl;
   } catch (error: any) {
-    logger.error("❌ Failed to upload CV to GHL custom field", {
+    logger.error("❌ Failed to upload CV to GHL", {
       contactId,
+      cvFilePath,
       error: error?.message ?? String(error),
+      stack: error?.stack,
     });
     return null;
   }
@@ -1311,6 +1329,7 @@ async function uploadCVToGHLCustomField(
 
 /**
  * Check for and upload cover letter if exists
+ * FIXED: Now uses correct /medias/upload-file endpoint
  */
 async function checkAndUploadCoverLetter(
   batchId: string,
@@ -1347,8 +1366,10 @@ async function checkAndUploadCoverLetter(
         const blob = new BlobCtor([coverLetterData], { type: "application/pdf" });
         const formData = new FormDataCtor();
         formData.append("file", blob, "cover_letter.pdf");
+        formData.append("name", "cover_letter.pdf"); // FIXED: Added name field
 
-        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}/files`, {
+        // FIXED: Correct endpoint
+        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/medias/upload-file`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -1359,7 +1380,8 @@ async function checkAndUploadCoverLetter(
 
         if (uploadResponse.ok) {
           const uploadResult = await uploadResponse.json();
-          const fileUrl = uploadResult?.url || uploadResult?.fileUrl || null;
+          // FIXED: Added publicUrl to fallback chain
+          const fileUrl = uploadResult?.url || uploadResult?.fileUrl || uploadResult?.publicUrl || null;
 
           logger.info("✅ Cover letter uploaded", {
             contactId,
@@ -1383,6 +1405,7 @@ async function checkAndUploadCoverLetter(
 
 /**
  * Check for and upload other documents if exists
+ * FIXED: Now uses correct /medias/upload-file endpoint
  */
 async function checkAndUploadOtherDocs(
   batchId: string,
@@ -1419,8 +1442,10 @@ async function checkAndUploadOtherDocs(
         const blob = new BlobCtor([docData], { type: "application/pdf" });
         const formData = new FormDataCtor();
         formData.append("file", blob, "application.pdf");
+        formData.append("name", "application.pdf"); // FIXED: Added name field
 
-        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}/files`, {
+        // FIXED: Correct endpoint
+        const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/medias/upload-file`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -1431,7 +1456,8 @@ async function checkAndUploadOtherDocs(
 
         if (uploadResponse.ok) {
           const uploadResult = await uploadResponse.json();
-          const fileUrl = uploadResult?.url || uploadResult?.fileUrl || null;
+          // FIXED: Added publicUrl to fallback chain
+          const fileUrl = uploadResult?.url || uploadResult?.fileUrl || uploadResult?.publicUrl || null;
 
           logger.info("✅ Other documents uploaded", {
             contactId,
