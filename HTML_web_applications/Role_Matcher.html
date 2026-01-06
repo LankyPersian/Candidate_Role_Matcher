@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hexona – Candidate Matcher (Demo)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    /* --- Global Reset --- */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: none !important;
+      color: #f1f5f9;
+      min-height: 100vh;
+      padding: 0 !important;
+      margin: 0 !important;
+      line-height: 1.6;
+    }
+
+    html {
+      background: none !important;
+      padding: 0 !important;
+      margin: 0 !important;
+    }
+
+    /* --- Container --- */
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 20px;
+      animation: fadeIn 0.5s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* --- Floating Header (NEW) --- */
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+      padding: 30px 20px;
+      background: linear-gradient(135deg, rgba(20, 25, 40, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%);
+      border-radius: 20px;
+      border: 2px solid rgba(96, 165, 250, 0.3);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    .header-icon {
+      font-size: 56px;
+      margin-bottom: 16px;
+      display: inline-block;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% {
+        transform: translateY(0px);
+      }
+      50% {
+        transform: translateY(-10px);
+      }
+    }
+
+    .header-title {
+      font-size: 42px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+
+    .header-subtitle {
+      font-size: 16px;
+      color: #94a3b8;
+      font-weight: 500;
+      line-height: 1.5;
+    }
+
+    /* --- Main Card --- */
+    .card {
+      background: #141928;
+      border-radius: 20px;
+      padding: 24px 32px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      border: 1px solid #1e293b;
+      transition: all 0.3s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(96, 165, 250, 0.3);
+      box-shadow: 0 20px 60px rgba(96, 165, 250, 0.1);
+    }
+
+    /* --- Form Grid --- */
+    .grid { 
+      display: grid; 
+      gap: 1rem; 
+      margin-bottom: 1.2rem;
+    }
+
+    @media (min-width: 780px) { 
+      .grid.two { 
+        grid-template-columns: 1fr 1fr; 
+      }
+    }
+
+    /* --- Form Elements --- */
+    label {
+      font-weight: 600;
+      font-size: 13px;
+      display: block;
+      margin-bottom: 8px;
+      color: #f1f5f9;
+      letter-spacing: 0.3px;
+    }
+
+    input[type="text"], 
+    input[type="number"], 
+    select, 
+    textarea,
+    input[type="file"] {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 2px solid #1e293b;
+      background: rgba(15, 23, 42, 0.5);
+      color: #f1f5f9;
+      font-size: 14px;
+      outline: none;
+      transition: all 0.3s ease;
+      font-family: inherit;
+    }
+
+    input[type="file"] { 
+      font-size: 13px;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+      color: #6b7280;
+    }
+
+    input:hover,
+    select:hover,
+    textarea:hover {
+      border-color: #374151;
+    }
+
+    input:focus, 
+    select:focus, 
+    textarea:focus {
+      border-color: #60a5fa;
+      background: rgba(15, 23, 42, 0.8);
+      box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.1);
+    }
+
+    /* --- Checkbox Styling --- */
+    input[type="checkbox"] {
+      accent-color: #60a5fa;
+      cursor: pointer;
+      width: 18px;
+      height: 18px;
+    }
+
+    label.checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      user-select: none;
+      cursor: pointer;
+      margin-bottom: 0;
+    }
+
+    /* --- Hints and Errors --- */
+    .hint { 
+      font-size: 12px; 
+      color: #94a3b8; 
+      margin-top: 8px; 
+    }
+
+    .error { 
+      display: none; 
+      margin-top: 8px; 
+      padding: 10px 12px; 
+      border-radius: 10px; 
+      background: rgba(239, 68, 68, 0.1); 
+      border: 2px solid rgba(239, 68, 68, 0.3); 
+      color: #ef4444; 
+      font-size: 13px;
+    }
+
+    /* --- Buttons --- */
+    .actions { 
+      display: flex; 
+      gap: 12px; 
+      flex-wrap: wrap; 
+      align-items: center;
+      margin-top: 16px;
+    }
+
+    button {
+      padding: 14px 28px;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 15px;
+      transition: all 0.3s ease;
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+      color: white;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(96, 165, 250, 0.4);
+    }
+
+    button:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    button.secondary {
+      background: rgba(15, 23, 42, 0.5);
+      border: 2px solid #1e293b;
+      color: #f1f5f9;
+      box-shadow: none;
+    }
+
+    button.secondary:hover:not(:disabled) {
+      border-color: #60a5fa;
+      background: rgba(96, 165, 250, 0.05);
+      transform: translateY(-1px);
+    }
+
+    /* --- Processing Indicator --- */
+    .processing {
+      background: rgba(96, 165, 250, 0.1);
+      border: 2px solid rgba(96, 165, 250, 0.3);
+      border-radius: 12px;
+      padding: 12px 16px;
+      display: none;
+      gap: 12px;
+      align-items: center;
+      font-size: 14px;
+      margin-top: 16px;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .spinner { 
+      width: 18px; 
+      height: 18px; 
+      border: 2px solid rgba(96, 165, 250, 0.3); 
+      border-top-color: #60a5fa; 
+      border-radius: 50%; 
+      animation: spin 0.8s linear infinite; 
+    }
+
+    @keyframes spin { 
+      to { transform: rotate(360deg); } 
+    }
+
+    /* --- Results Section --- */
+    .results { 
+      margin-top: 20px; 
+      display: none; 
+    }
+
+    .results h2 {
+      font-size: 22px;
+      margin: 0 0 12px 0;
+      color: #f1f5f9;
+      font-weight: 700;
+    }
+
+    .candidate-card { 
+      border: 1px solid #1e293b; 
+      border-radius: 16px; 
+      padding: 16px 20px; 
+      background: rgba(15, 23, 42, 0.5); 
+      margin-bottom: 16px;
+      transition: all 0.3s ease;
+    }
+
+    .candidate-card:hover {
+      border-color: rgba(96, 165, 250, 0.3);
+      background: rgba(15, 23, 42, 0.7);
+    }
+
+    .candidate-card h3 { 
+      margin: 0; 
+      font-size: 18px;
+      color: #f1f5f9;
+      font-weight: 700;
+    }
+
+    .candidate-meta { 
+      font-size: 13px; 
+      color: #94a3b8; 
+      margin: 8px 0 12px; 
+    }
+
+    .badge { 
+      display: inline-block; 
+      background: rgba(96, 165, 250, 0.15); 
+      color: #60a5fa; 
+      border: 1px solid rgba(96, 165, 250, 0.3);
+      border-radius: 999px; 
+      padding: 4px 12px; 
+      font-size: 12px; 
+      font-weight: 600; 
+      margin-right: 8px; 
+    }
+
+    .section-title { 
+      font-size: 13px; 
+      font-weight: 700; 
+      margin-top: 12px; 
+      margin-bottom: 6px; 
+      color: #f1f5b9; 
+      letter-spacing: 0.3px;
+    }
+
+    .small-text { 
+      font-size: 13px; 
+      margin-bottom: 8px; 
+      color: #cbd5e1; 
+      line-height: 1.6;
+    }
+
+    .download-row { 
+      margin-top: 16px; 
+      display: flex; 
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    /* --- Responsive --- */
+    @media (max-width: 640px) {
+      .app {
+        padding: 16px;
+      }
+
+      .header-title {
+        font-size: 32px;
+      }
+
+      .header-subtitle {
+        font-size: 14px;
+      }
+
+      .card {
+        padding: 24px;
+        border-radius: 16px;
+      }
+
+      button,
+      button.secondary {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="Hexona Candidate Match Demo">
+    <!-- Floating Header -->
+    <div class="header">
+      <div class="header-icon">🎯</div>
+      <h1 class="header-title">Hexona Candidate Matcher</h1>
+      <p class="header-subtitle">Upload a job description and Hexona will return shortlisted candidates</p>
+    </div>
+
+    <!-- Main Card -->
+    <div class="card">
+      <div class="grid">
+        <div>
+          <label for="jdFile">Job description (upload)</label>
+          <input type="file" id="jdFile" accept=".txt,.pdf,.doc,.docx" aria-describedby="jdHint" />
+          <p id="jdHint" class="hint">For demo purposes this file is not sent – it only simulates the flow.</p>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Is this a general search for your entire candidate pool or a specific job?</label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="isSpecificJob" /> 
+            <span>Specific job</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="jobIdWrap" class="grid" style="display:none;">
+        <div>
+          <label for="jobId">Job ID</label>
+          <input type="text" id="jobId" placeholder="e.g. JOB-2025-001" />
+        </div>
+      </div>
+
+      <div class="grid two">
+        <div>
+          <label for="town">Job listing town / city</label>
+          <input type="text" id="town" placeholder="e.g. Newcastle upon Tyne" />
+        </div>
+        <div>
+          <label for="country">Country</label>
+          <input type="text" id="country" placeholder="e.g. United Kingdom" />
+        </div>
+      </div>
+
+      <div class="grid two">
+        <div>
+          <label for="radius">Candidate distance radius (km)</label>
+          <input type="number" id="radius" value="50" min="1" />
+          <p class="hint">Candidates will be generated within this distance.</p>
+        </div>
+        <div>
+          <label for="count">Number of candidates to return</label>
+          <input type="number" id="count" value="5" min="1" />
+          <p class="hint">Select how many candidates to return. <strong>At least 5</strong> required for ICO-style guidance.</p>
+          <div id="countError" class="error" role="alert">Please select at least 5 candidates to comply with guidance.</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="runBtn" aria-label="Run AI Match">🚀 Run AI Match</button>
+        <span id="statusMsg" class="hint" aria-live="polite"></span>
+      </div>
+
+      <div id="processing" class="processing" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          <strong>Processing…</strong>
+          <div class="hint" style="margin-top:2px">processing</div>
+        </div>
+      </div>
+
+      <div id="results" class="results">
+        <h2>Matched candidates</h2>
+        <p id="results-summary" class="hint" style="margin-bottom:12px;"></p>
+        <div id="candidate-list"></div>
+        <div class="download-row">
+          <button class="secondary" id="downloadCsvBtn">Download CSV</button>
+          <button class="secondary" id="downloadTxtBtn">Download TXT</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const runBtn = document.getElementById('runBtn');
+    const processing = document.getElementById('processing');
+    const results = document.getElementById('results');
+    const candidateList = document.getElementById('candidate-list');
+    const resultsSummary = document.getElementById('results-summary');
+    const downloadCsvBtn = document.getElementById('downloadCsvBtn');
+    const downloadTxtBtn = document.getElementById('downloadTxtBtn');
+    const countInput = document.getElementById('count');
+    const countError = document.getElementById('countError');
+    const isSpecificJob = document.getElementById('isSpecificJob');
+    const jobIdWrap = document.getElementById('jobIdWrap');
+    const jobIdInput = document.getElementById('jobId');
+
+    let lastGenerated = [];
+
+    const candidateNames = [
+      "Georgia Patel", "Allan McBride", "Sofia Ahmed", "Daniel Cook", "Priya Desai",
+      "James O'Connor", "Isla Henderson", "Theo Barrett", "Maya Shaw", "Oliver Grant",
+      "Ava Kaur", "Lucas Bell", "Ethan Harris", "Grace Mitchell", "Noah Fraser"
+    ];
+
+    function randomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+    function pickMany(arr, n) {
+      const copy = [...arr]; const out = [];
+      for (let i = 0; i < n && copy.length; i++) out.push(copy.splice(Math.floor(Math.random()*copy.length), 1)[0]);
+      return out;
+    }
+
+    function generateCandidates(n, town, radiusKm) {
+      const total = n; // validation enforces >= 5 before calling
+
+      const sectors = ["FinTech","Healthcare","E-commerce","Manufacturing","Public Sector","Education","Energy","Media"]; 
+      const roles = ["Account Manager","Project Lead","Implementation Consultant","Recruiter","Sales Executive","Business Analyst","Operations Coordinator","Customer Success Manager"]; 
+      const tech = ["Salesforce","HubSpot","Excel/PowerQuery","SQL","Power BI","Looker","Outreach","Zapier/Make","Greenhouse","Workday"];
+      const frameworks = ["STAR methodology","Agile/Scrum","Lean","OKRs","RACI","KPI dashboards"];
+      const kpis = ["time-to-fill","pipeline coverage","NPS","win-rate","churn","SLAs","forecast accuracy"]; 
+      const stakeholders = ["C-suite","Heads of Department","hiring managers","procurement","legal","finance"];
+      const certs = ["PRINCE2 Foundation","PMP","SFDC Admin","HubSpot Marketing","Google Data Analytics","SHRM-CP"];
+
+      // More recruiter-like shortfall patterns
+      const gapPatterns = [
+        {
+          gap: ({ topic }) => `Main development area is depth with ${topic}. They have used it around the edges in previous roles but have not yet been the person owning it end-to-end, so there will be a learning curve if this role expects them to be the internal go-to.`,
+          advice: ({ topic }) => `In interview, it's better they are upfront about where they are today with ${topic} and then walk through a clear 30–60–90 day plan: what they'd read, which training they'd complete, who they'd shadow and what sort of small internal project they would run to prove they've closed the gap. Hiring manager will want concrete actions rather than a generic "I'll pick it up quickly".`
+        },
+        {
+          gap: ({ primaryStake }) => `Less evidence of partnering directly with senior ${primaryStake} on more strategic pieces of work – most of their examples sit at operational or mid-level stakeholders.`,
+          advice: ({ primaryStake }) => `I'd have them prepare one or two structured STAR stories where they had to push back or influence upwards, even if the job titles were different. In the interview they should also ask smart questions about how ${primaryStake} are measured in this business and then link their impact stories back to those measures.`
+        },
+        {
+          gap: () => `Sector experience is adjacent rather than like-for-like. They understand the mechanics of the industry but will be lighter on specific terminology and competitor landscape on day one.`,
+          advice: () => `Recommend they invest a couple of evenings ahead of interview mapping the main players, typical customer journey and any current regulatory or market shifts. In the room they should talk through how they'd build credibility in the first 90 days despite not coming from a direct competitor – who they'd speak to, what they'd read and how they'd feed that back.`
+        },
+        {
+          gap: () => `Has so far managed a smaller portfolio or territory than this brief suggests. Solid experience, but less evidence of owning the full commercial picture at the scale you're describing.`,
+          advice: () => `They should frame their current workload clearly – volume, complexity and any revenue or budget figures – and lean into examples where they've stepped up (covering for peers, leading pilots, mentoring juniors). This helps the hiring manager see headroom and appetite for stretch rather than pure risk.`
+        },
+        {
+          gap: ({ primaryKpi, secondaryKpi }) => `Less hands-on experience building reporting or MI from scratch – tends to rely on existing dashboards rather than designing their own views.`,
+          advice: ({ primaryKpi, secondaryKpi }) => `Ahead of interview, ask them to sketch a simple one-pager showing how they'd track ${primaryKpi} and ${secondaryKpi} in the first quarter. The key is that they can move from "numbers" to "so what": what they would change, who they'd speak with and how they'd use the data to drive behaviour rather than just produce charts.`
+        }
+      ];
+
+      const out = [];
+      for (let i = 0; i < total; i++) {
+        const name = candidateNames[i % candidateNames.length] + (i >= candidateNames.length ? " Jr." : "");
+        const firstName = name.split(' ')[0];
+        const years = Math.floor(Math.random() * 7) + 3; // 3–9
+        const sector = randomFrom(sectors);
+        const recentRole = randomFrom(roles);
+        const prevRole = randomFrom(roles);
+        const topTech = pickMany(tech, 3);
+        const usedFrameworks = pickMany(frameworks, 2);
+        const primaryStake = randomFrom(stakeholders);
+        const primaryKpi = randomFrom(kpis);
+        const secondaryKpi = randomFrom(kpis.filter(k => k !== primaryKpi));
+        const expScore = (Math.random() * 2.5 + 6.5).toFixed(1); // 6.5–9.0
+        const skillScore = (Math.random() * 2.5 + 6.3).toFixed(1); // 6.3–8.8 approx
+
+        const distance = Math.floor(Math.random() * Math.max(5, radiusKm));
+        const recentYears = Math.min(years, Math.floor(Math.random() * 3) + 1);
+        const recentYearsText = recentYears === 1 ? "the last year" : `the last ${recentYears} years`;
+        const locationLine = town 
+          ? ` ${firstName} is based roughly ${distance} km from ${town}, so the commute for an on-site or hybrid pattern looks workable.` 
+          : "";
+
+        const reasonExp = `${firstName} has around ${years} years' experience in ${sector}, with ${recentYearsText} spent in a ${recentRole.toLowerCase()}-style role. Current remit typically involves handling ${Math.floor(Math.random() * 5) + 5} active accounts/projects at any one time, working closely with ${primaryStake} to deliver against agreed outcomes. There are solid examples of moving the needle on ${primaryKpi} and bringing more structure into the team using ${usedFrameworks[0]} (e.g. clearer rituals, expectations and follow-up). Before that, time as a ${prevRole.toLowerCase()} gave good exposure to the delivery side and day-to-day problem solving.${locationLine} Overall, scope and pace feel comparable to what this brief is asking for – more of a step-across with a bit of stretch rather than a big jump in seniority.`;
+
+        const reasonSkill = `On the skills side, this lines up well with what the JD is pushing for. Day-to-day toolkit includes ${topTech[0]} and ${topTech[1]}, with regular use of ${topTech[2]} for reporting or light automation. They are used to working within ${usedFrameworks.join(" and ")} frameworks and talking to metrics like ${primaryKpi} and ${secondaryKpi} rather than just activities. There's evidence of them documenting simple playbooks or SOPs and using tools such as ${randomFrom(["Make","Zapier"])} to strip out low-value admin. There is still room to deepen capability around ${topTech[2]} and adjacent tooling, but the core building blocks the role needs are present.`;
+
+        const gapTopic = randomFrom([...tech, ...frameworks]);
+        const gapObj = randomFrom(gapPatterns);
+        const context = { topic: gapTopic, primaryStake, primaryKpi, secondaryKpi };
+        const shortfallText = gapObj.gap(context);
+        const adviceText = gapObj.advice(context);
+
+        out.push({
+          name,
+          experienceScore: expScore,
+          experienceReason: reasonExp,
+          skillScore: skillScore,
+          skillReason: reasonSkill,
+          notMet: shortfallText,
+          advice: adviceText,
+          distanceKm: distance,
+          town: town || "—"
+        });
+      }
+      return out;
+    }
+
+    function renderCandidates(cands) {
+      candidateList.innerHTML = "";
+      cands.forEach((c, idx) => {
+        const el = document.createElement('div');
+        el.className = 'candidate-card';
+        el.innerHTML = `
+          <h3>${idx + 1}. ${c.name}</h3>
+          <div class="candidate-meta">Distance: <strong>${c.distanceKm} km</strong> ${c.town !== "—" ? ("from " + c.town) : ""}</div>
+          <div class="section-title">Experience match</div>
+          <div class="small-text">Score: <span class="badge">${c.experienceScore}/10</span></div>
+          <div class="small-text">${c.experienceReason}</div>
+          <div class="section-title">Skills match</div>
+          <div class="small-text">Score: <span class="badge">${c.skillScore}/10</span></div>
+          <div class="small-text">${c.skillReason}</div>
+          <div class="section-title">Potential shortfalls</div>
+          <div class="small-text">${c.notMet}</div>
+          <div class="section-title">Interview advice to overcome shortfalls</div>
+          <div class="small-text">${c.advice}</div>`;
+        candidateList.appendChild(el);
+      });
+    }
+
+    // toggle Job ID visibility
+    if (isSpecificJob) {
+      isSpecificJob.addEventListener('change', (e) => {
+        jobIdWrap.style.display = e.target.checked ? 'block' : 'none';
+      });
+    }
+
+    runBtn.addEventListener('click', () => {
+      // reset errors
+      countError.style.display = 'none';
+
+      const town = document.getElementById('town').value.trim();
+      const radius = parseInt(document.getElementById('radius').value, 10) || 50;
+      const count = parseInt(countInput.value, 10);
+
+      if (!count || count < 5) {
+        countError.textContent = 'Please select at least 5 candidates to comply with guidance.';
+        countError.style.display = 'block';
+        countInput.focus();
+        return; // do not proceed
+      }
+
+      // UX: allow empty town (demo), but you can enforce if needed
+      results.style.display = "none";
+      processing.style.display = "flex";
+      runBtn.disabled = true;
+
+      setTimeout(() => {
+        const cands = generateCandidates(count, town, radius);
+        lastGenerated = cands;
+        renderCandidates(cands);
+        const idSuffix = (isSpecificJob && isSpecificJob.checked && jobIdInput && jobIdInput.value.trim()) ? ` for Job ID ${jobIdInput.value.trim()}` : '';
+        resultsSummary.textContent = `Returned ${cands.length} candidates within ${radius} km${town ? " of " + town : ""}${idSuffix}.`;
+        processing.style.display = "none";
+        results.style.display = "block";
+        runBtn.disabled = false;
+        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 10000);
+    });
+
+    function toCSV(cands) {
+      const headers = ["name","experience_score","experience_reason","skill_score","skill_reason","shortfalls","advice","distance_km"];
+      const rows = cands.map(c => [c.name,c.experienceScore,c.experienceReason,c.skillScore,c.skillReason,c.notMet,c.advice,c.distanceKm]
+        .map(v => `"${String(v).replace(/"/g, '""')}"`).join(","));
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function toTXT(cands) {
+      return cands.map((c, i) => [
+        `Candidate ${i + 1}: ${c.name}`,
+        `Experience match: ${c.experienceScore}/10`,
+        `Reason: ${c.experienceReason}`,
+        `Skills match: ${c.skillScore}/10`,
+        `Reason: ${c.skillReason}`,
+        `Potential shortfalls: ${c.notMet}`,
+        `Advice: ${c.advice}`,
+        `Distance: ${c.distanceKm} km`,
+        `---`
+      ].join("\n")).join("\n");
+    }
+
+    function downloadFile(content, filename, mime) {
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+
+    downloadCsvBtn.addEventListener('click', () => {
+      if (!lastGenerated.length) return;
+      downloadFile(toCSV(lastGenerated), 'hexona_candidates_demo.csv', 'text/csv');
+    });
+    downloadTxtBtn.addEventListener('click', () => {
+      if (!lastGenerated.length) return;
+      downloadFile(toTXT(lastGenerated), 'hexona_candidates_demo.txt', 'text/plain');
+    });
+
+    // ---- Smoke tests to prevent regressions (console only) ----
+    (function runSmokeTests(){
+      try {
+        const t = generateCandidates(5, 'Testville', 25);
+        console.assert(Array.isArray(t) && t.length === 5, 'generateCandidates should return exactly requested count when >= 5');
+        const csv = toCSV(t);
+        console.assert(typeof csv === 'string' && csv.includes('\n'), 'toCSV should include newlines');
+        const txt = toTXT(t);
+        console.assert(typeof txt === 'string' && /Candidate 1:/.test(txt), 'toTXT should contain Candidate 1 header');
+
+        // validation path (no timer should start)
+        const prev = countInput.value;
+        countInput.value = '3';
+        runBtn.click();
+        console.assert(countError.style.display === 'block', 'count < 5 should show inline error');
+        console.assert(processing.style.display !== 'flex', 'count < 5 should not show processing');
+        countInput.value = prev; // restore
+        countError.style.display = 'none';
+        console.debug('Smoke tests passed');
+      } catch (e) {
+        console.error('Smoke tests failed:', e);
+      }
+    })();
+  </script>
+</body>
+</html>
