@@ -553,12 +553,10 @@ export function buildCompleteGHLCustomFields(
     );
   }
 
-  // Raw CV text (for AI matching later)
+  // Raw documents text (for AI matching later) - use documents_raw_text if available, fallback to cv_raw_text
   if (config.candidate_provided_cv_text) {
-    fields.candidate_provided_cv_text = truncateToLimit(
-      data.cv_raw_text || "",
-      limits.textarea
-    );
+    const rawText = data.documents_raw_text || data.cv_raw_text || "";
+    fields.candidate_provided_cv_text = truncateToLimit(rawText, limits.textarea);
   }
 
   return fields;

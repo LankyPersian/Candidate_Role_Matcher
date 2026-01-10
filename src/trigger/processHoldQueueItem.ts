@@ -26,6 +26,7 @@ import {
   logBatchCostSummary,
 } from "./costTracker";
 import { buildCompleteGHLCustomFields, splitName } from "./ghlTransformers";
+import { mapFieldsToGHLFormat } from "./ghlFieldMapper";
 
 // ============================================
 // TYPES
@@ -109,13 +110,20 @@ export const processHoldQueueItem = task({
         reason: holdItem.extraction_data?.reason,
       });
 
-      // 2) Parse CV data
+      // 2) Parse pack data - use documents_raw_text if available, fallback to cv_raw_text
       let parsedData: ParsedCV;
 
-      if (holdItem.cv_raw_text && holdItem.cv_raw_text.trim().length > 50) {
-        logger.info("Running full parse on raw text", { correlationId });
-        parsedData = await fullParse(holdItem.cv_raw_text);
-        parsedData.cv_raw_text = holdItem.cv_raw_text;
+      const rawTextToParse = holdItem.documents_raw_text || holdItem.cv_raw_text || null;
+
+      if (rawTextToParse && rawTextToParse.trim().length > 50) {
+        logger.info("Running full parse on pack documents text", { 
+          correlationId,
+          textLength: rawTextToParse.length,
+          hasDocuments: !!holdItem.documents,
+        });
+        parsedData = await fullParse(rawTextToParse);
+        parsedData.documents_raw_text = rawTextToParse; // Store combined text
+        parsedData.cv_raw_text = rawTextToParse; // Backward compatibility
         await trackFullParse(holdItem.batch_id);
       } else {
         logger.warn("No raw text available, using empty CV", { correlationId });
@@ -166,38 +174,64 @@ export const processHoldQueueItem = task({
         });
       }
 
-      // 6) Write/update candidate in Supabase
+      // 6) Extract documents metadata from hold_queue
+      const documents = holdItem.documents || [];
+      const cvDoc = documents.find((d: any) => d.document_type === "cv" || d.type === "cv");
+      const coverLetterDocs = documents.filter((d: any) => 
+        d.document_type === "cover_letter" || d.type === "cover_letter"
+      );
+      const otherDocs = documents.filter((d: any) => 
+        (d.document_type === "application" || d.document_type === "supporting_document") ||
+        (d.type === "application" || d.type === "supporting_document")
+      );
+
+      // Use documents metadata if available, otherwise fallback to cv_file_path
+      const cvFilePath = cvDoc?.path || holdItem.cv_file_path;
+      const coverLetterPath = coverLetterDocs.length > 0 ? coverLetterDocs[0].path : null;
+      const otherDocsPaths = otherDocs.length > 0 ? otherDocs.map((d: any) => d.path) : null;
+
+      // 7) Write/update candidate in Supabase with documents metadata
       let candidateId: string;
 
       if (shouldUpdate && existingCandidateId) {
         await updateCandidate(existingCandidateId, {
           ...parsedData,
-          cv_file_path: holdItem.cv_file_path,
+          cv_file_path: cvFilePath,
+          cover_letter_file_path: coverLetterPath,
+          application_docs_file_paths: otherDocsPaths,
+          documents: documents,
+          documents_raw_text: rawTextToParse,
           batch_id: holdItem.batch_id,
           status: "pending_ghl_sync",
           is_update: true,
         });
         candidateId = existingCandidateId;
-        logger.info("✅ Updated existing candidate in Supabase", {
+        logger.info("✅ Updated existing candidate in Supabase with pack documents", {
           correlationId,
           candidateId,
+          documentsCount: documents.length,
         });
       } else {
         candidateId = await writeCandidate({
           ...parsedData,
           client_id: holdItem.client_id || null,
           ghl_contact_id: null,
-          cv_file_path: holdItem.cv_file_path,
+          cv_file_path: cvFilePath,
+          cover_letter_file_path: coverLetterPath,
+          application_docs_file_paths: otherDocsPaths,
+          documents: documents,
+          documents_raw_text: rawTextToParse,
           batch_id: holdItem.batch_id,
           status: "pending_ghl_sync",
         });
-        logger.info("✅ Created new candidate in Supabase", {
+        logger.info("✅ Created new candidate in Supabase with pack documents", {
           correlationId,
           candidateId,
+          documentsCount: documents.length,
         });
       }
 
-      // 7) Sync to GHL
+      // 8) Sync to GHL
       const ghlAccessToken = ENV.GHL_PRIVATE_KEY;
       let ghlContactId = null;
 
@@ -230,13 +264,13 @@ export const processHoldQueueItem = task({
           }
         }
 
-        // Upload CV file to GHL
+        // Upload CV file to GHL (candidate_provided_cv)
         let cvFileUrl: string | null = null;
-        if (ghlContactId && holdItem.cv_file_path) {
-          const cvUploadResult = await uploadCVToGHL(
+        if (ghlContactId && cvFilePath) {
+          const cvUploadResult = await uploadFileToGHL(
             ghlContactId,
-            holdItem.cv_file_path,
-            holdItem.file_name || "cv.pdf",
+            cvFilePath,
+            cvDoc?.name || holdItem.file_name || "cv.pdf",
             ghlAccessToken
           );
           await trackGHLCall("upload_file", holdItem.batch_id);
@@ -258,18 +292,21 @@ export const processHoldQueueItem = task({
           }
         }
 
-        // Upload cover letter (if exists)
+        // Upload cover letter (cover_letter field) - if exists in documents
         let coverLetterUrl: string | null = null;
-        if (ghlContactId && holdItem.cv_file_path) {
+        if (ghlContactId && coverLetterPath && coverLetterDocs.length > 0) {
           try {
-            coverLetterUrl = await uploadCoverLetterToGHL(
+            const clDoc = coverLetterDocs[0];
+            const clUploadResult = await uploadFileToGHL(
               ghlContactId,
-              holdItem.cv_file_path,
+              coverLetterPath,
+              clDoc.name || "cover_letter.pdf",
               ghlAccessToken
             );
-            if (coverLetterUrl) {
+            if (clUploadResult.success && clUploadResult.fileUrl) {
               await trackGHLCall("upload_file", holdItem.batch_id);
-              logger.info("✅ Cover letter uploaded", {
+              coverLetterUrl = clUploadResult.fileUrl;
+              logger.info("✅ Cover letter uploaded to GHL", {
                 correlationId,
                 ghlContactId,
                 fileUrl: coverLetterUrl,
@@ -283,21 +320,26 @@ export const processHoldQueueItem = task({
           }
         }
 
-        // Upload other documents (if exists)
+        // Upload other documents (application__other_documents field) - if exists
         let otherDocsUrl: string | null = null;
-        if (ghlContactId && holdItem.cv_file_path) {
+        if (ghlContactId && otherDocsPaths && otherDocsPaths.length > 0) {
           try {
-            otherDocsUrl = await uploadOtherDocsToGHL(
+            // Upload first other doc (can be enhanced to handle multiple)
+            const odDoc = otherDocs[0];
+            const odUploadResult = await uploadFileToGHL(
               ghlContactId,
-              holdItem.cv_file_path,
+              otherDocsPaths[0],
+              odDoc.name || "application.pdf",
               ghlAccessToken
             );
-            if (otherDocsUrl) {
+            if (odUploadResult.success && odUploadResult.fileUrl) {
               await trackGHLCall("upload_file", holdItem.batch_id);
-              logger.info("✅ Other documents uploaded", {
+              otherDocsUrl = odUploadResult.fileUrl;
+              logger.info("✅ Other documents uploaded to GHL", {
                 correlationId,
                 ghlContactId,
                 fileUrl: otherDocsUrl,
+                totalOtherDocs: otherDocsPaths.length,
               });
             }
           } catch (odError: any) {
@@ -308,8 +350,8 @@ export const processHoldQueueItem = task({
           }
         }
 
-        // Update GHL contact with all fields + file URLs
-        await updateGHLContact(
+        // Update GHL contact with all fields + file URLs using robust field mapping
+        await updateGHLContactWithMapping(
           ghlContactId,
           parsedData,
           candidateId,
@@ -320,12 +362,13 @@ export const processHoldQueueItem = task({
         );
         await trackGHLCall("update_contact", holdItem.batch_id);
 
-        logger.info("✅ GHL contact updated with full data", {
+        logger.info("✅ GHL contact updated with full pack data", {
           correlationId,
           ghlContactId,
           cvUploaded: !!cvFileUrl,
           coverLetterUploaded: !!coverLetterUrl,
           otherDocsUploaded: !!otherDocsUrl,
+          documentsCount: documents.length,
         });
 
         await updateCandidateGHL(candidateId, ghlContactId, "complete");
@@ -345,7 +388,35 @@ export const processHoldQueueItem = task({
         await updateCandidateGHL(candidateId, null, "ghl_sync_failed");
       }
 
-      // 8) Mark hold queue item as complete
+      // 9) Update file_processing_status for all documents in pack
+      if (documents && Array.isArray(documents)) {
+        for (const doc of documents) {
+          if (doc.path && doc.name) {
+            await updateFileStatusForHoldQueue(
+              holdItem.batch_id,
+              doc.path,
+              doc.name,
+              "complete",
+              undefined,
+              candidateId,
+              doc.type || doc.document_type
+            );
+          }
+        }
+      } else if (holdItem.cv_file_path) {
+        // Backward compatibility: update single file
+        await updateFileStatusForHoldQueue(
+          holdItem.batch_id,
+          holdItem.cv_file_path,
+          holdItem.file_name || "unknown",
+          "complete",
+          undefined,
+          candidateId,
+          "cv"
+        );
+      }
+
+      // 10) Mark hold queue item as complete
       await updateHoldQueueStatus(holdQueueId, "complete", candidateId);
 
       logger.info("✅ Hold queue item processing complete", {
@@ -720,7 +791,10 @@ async function createGHLContact(data: ParsedCV, accessToken: string): Promise<st
   throw new Error("GHL contact creation failed after trying payload variants");
 }
 
-async function updateGHLContact(
+/**
+ * Update GHL contact with robust field mapping (key -> ID)
+ */
+async function updateGHLContactWithMapping(
   contactId: string,
   data: ParsedCV,
   candidateId: string,
@@ -729,6 +803,7 @@ async function updateGHLContact(
   otherDocsUrl: string | null,
   accessToken: string
 ): Promise<void> {
+  // Build custom fields data (key-value pairs)
   const customFieldsData = buildCompleteGHLCustomFields(
     data,
     candidateId,
@@ -737,10 +812,15 @@ async function updateGHLContact(
     otherDocsUrl
   );
 
-  const customFields = Object.entries(customFieldsData).map(([key, value]) => ({
-    key,
-    value: value || "",
-  }));
+  // Map fields to GHL format (key -> ID if available)
+  const mappedFields = await mapFieldsToGHLFormat(customFieldsData, accessToken);
+
+  logger.info("Updating GHL contact with mapped fields", {
+    contactId,
+    fieldCount: mappedFields.length,
+    usingIds: mappedFields.filter(f => f.id).length,
+    usingKeys: mappedFields.filter(f => f.key).length,
+  });
 
   const response = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}`, {
     method: "PUT",
@@ -749,7 +829,7 @@ async function updateGHLContact(
       "Content-Type": "application/json",
       Version: GHL_CONFIG.API_VERSION,
     },
-    body: JSON.stringify({ customFields }),
+    body: JSON.stringify({ customFields: mappedFields }),
   });
 
   if (!response.ok) {
@@ -776,14 +856,17 @@ function encodeStoragePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-async function uploadCVToGHL(
+/**
+ * Generic file upload to GHL - works for CV, cover letter, or other documents
+ */
+async function uploadFileToGHL(
   contactId: string,
-  cvFilePath: string,
+  filePath: string,
   originalFilename: string,
   accessToken: string
 ): Promise<{ success: boolean; fileUrl?: string; error?: string }> {
   try {
-    const encodedPath = encodeStoragePath(cvFilePath);
+    const encodedPath = encodeStoragePath(filePath);
     const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
 
     const downloadResponse = await fetch(downloadUrl, {
@@ -795,7 +878,7 @@ async function uploadCVToGHL(
 
     if (!downloadResponse.ok) {
       const t = await downloadResponse.text();
-      throw new Error(`Failed to download CV: ${downloadResponse.status} - ${t.slice(0, 300)}`);
+      throw new Error(`Failed to download file: ${downloadResponse.status} - ${t.slice(0, 300)}`);
     }
 
     const fileBuffer = await downloadResponse.arrayBuffer();
@@ -825,7 +908,7 @@ async function uploadCVToGHL(
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
       throw new Error(
-        `GHL upload failed: ${uploadResponse.status} - ${errorText.slice(0, 800)}`
+        `GHL file upload failed: ${uploadResponse.status} - ${errorText.slice(0, 800)}`
       );
     }
 
@@ -837,8 +920,9 @@ async function uploadCVToGHL(
       fileUrl,
     };
   } catch (error: any) {
-    logger.error("Failed to upload CV to GHL", {
+    logger.error("Failed to upload file to GHL", {
       contactId,
+      filePath,
       error: error?.message ?? String(error),
     });
 
@@ -1094,6 +1178,52 @@ async function updateCandidateGHL(
   if (!response.ok) {
     const t = await response.text();
     throw new Error(`Failed to update candidate GHL/status: ${t.slice(0, 800)}`);
+  }
+}
+
+async function updateFileStatusForHoldQueue(
+  batchId: string,
+  filePath: string,
+  fileName: string,
+  status: "pending" | "processing" | "complete" | "failed" | "rejected",
+  errorMessage?: string,
+  candidateId?: string,
+  documentType?: string
+): Promise<void> {
+  const record: any = {
+    batch_id: batchId,
+    file_path: filePath,
+    file_name: fileName,
+    status,
+    last_updated: new Date().toISOString(),
+  };
+
+  if (errorMessage) record.error_message = errorMessage;
+  if (candidateId) record.candidate_id = candidateId;
+  if (documentType) record.document_type = documentType;
+  if (status === "complete" || status === "failed" || status === "rejected") {
+    record.processed_at = new Date().toISOString();
+  }
+
+  // Upsert (insert or update)
+  const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/file_processing_status`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+      apikey: ENV.SUPABASE_SERVICE_KEY,
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates",
+    },
+    body: JSON.stringify(record),
+  });
+
+  if (!response.ok) {
+    const txt = await response.text();
+    logger.warn("Failed to update file status for hold queue", {
+      status: response.status,
+      error: txt.slice(0, 500),
+      filePath,
+    });
   }
 }
 
