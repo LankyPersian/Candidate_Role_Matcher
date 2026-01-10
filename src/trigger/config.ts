@@ -93,6 +93,8 @@ export const SUPABASE_CONFIG = {
   // Retry configuration
   MAX_RETRIES: 3,
   INITIAL_RETRY_DELAY_MS: 500,
+  MAX_RETRY_DELAY_MS: 5000,
+  RETRY_JITTER_MS: 200,
   
   // Timeouts
   TIMEOUT_MS: 30000,
@@ -125,9 +127,9 @@ export const CLASSIFICATION_CONFIG = {
   MIN_CONFIDENCE_THRESHOLD: 0.70, // 70% confidence required
   HIGH_CONFIDENCE_THRESHOLD: 0.90, // 90% = high confidence
   
-  // Document types
-  VALID_DOCUMENT_TYPES: ["cv", "resume"],
-  INVALID_DOCUMENT_TYPES: ["invoice", "letter", "contract", "form", "other"],
+  // Document types - expanded to support multi-document packs
+  VALID_DOCUMENT_TYPES: ["cv", "resume", "cover_letter", "application", "supporting_document"],
+  INVALID_DOCUMENT_TYPES: ["invoice", "contract", "form", "irrelevant"],
   
   // Processing decisions
   AUTO_REJECT_BELOW_THRESHOLD: true,
@@ -437,10 +439,35 @@ export function getCostWarningLevel(
 }
 
 // ============================================
+// FILE GROUPING CONFIGURATION
+// ============================================
+export const PACK_GROUPING_CONFIG = {
+  // Grouping strategies (in order of preference)
+  GROUP_BY_EMAIL: true,
+  GROUP_BY_PHONE: true,
+  GROUP_BY_NAME: true,
+  
+  // Name-based grouping patterns
+  NAME_PATTERNS: [
+    /^(.+?)[_-](?:cv|resume|cover|letter|application|app)\./i,
+    /^(.+?)\s+(?:cv|resume|cover|letter|application)\./i,
+  ],
+  
+  // Minimum confidence for grouping by name
+  MIN_NAME_MATCH_CONFIDENCE: 0.80,
+  
+  // Maximum files per pack (safety limit)
+  MAX_FILES_PER_PACK: 10,
+  
+  // Allow single-file packs (orphaned files)
+  ALLOW_SINGLE_FILE_PACKS: true,
+} as const;
+
+// ============================================
 // TYPE EXPORTS
 // ============================================
 export type CostWarningLevel = "ok" | "warning" | "critical" | "exceeded";
-export type DocumentType = "cv" | "resume" | "invoice" | "letter" | "contract" | "form" | "other";
+export type DocumentType = "cv" | "resume" | "cover_letter" | "application" | "supporting_document" | "irrelevant";
 export type ProcessingStatus = "pending" | "processing" | "complete" | "failed" | "awaiting_input";
 export type CandidateStatus = "pending_ghl_sync" | "complete" | "ghl_sync_failed";
 export type HoldQueueStatus = "pending" | "ready_for_processing" | "complete" | "skipped";

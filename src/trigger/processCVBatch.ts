@@ -42,10 +42,20 @@ import {
   ClassificationResult,
 } from "./documentClassifier";
 import { buildCompleteGHLCustomFields, splitName } from "./ghlTransformers";
+import { mapFieldsToGHLFormat } from "./ghlFieldMapper";
+import { PACK_GROUPING_CONFIG } from "./config";
 
 // ============================================
 // TYPES
 // ============================================
+
+interface BatchConfig {
+  upload_type: 'general' | 'specific';
+  job_id: string | null;
+  required_skills: string[];
+  exclude_students: boolean;
+  colleague: string;
+}
 
 interface CVBatchPayload {
   batchId: string;
@@ -82,6 +92,7 @@ interface ParsedCV {
   relocation_willingness: string | null;
   remote_work_preference: string | null;
   cv_summary: string | null;
+  cv_raw_text?: string;
 }
 
 interface FileProcessingStatus {
@@ -97,6 +108,7 @@ interface BatchStats {
   total_files: number;
   classified: number;
   rejected_by_classification: number;
+  rejected_by_filters: number;
   processed: number;
   failed: number;
   held_for_review: number;
@@ -109,6 +121,298 @@ interface BatchStats {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ============================================
+// BATCH CONFIGURATION
+// ============================================
+
+async function loadBatchConfig(batchId: string): Promise<BatchConfig> {
+  const response = await fetch(
+    `${ENV.SUPABASE_URL}/rest/v1/processing_batches?id=eq.${batchId}&select=upload_type,job_id,required_skills,exclude_students,colleague&limit=1`,
+    {
+      headers: {
+        Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+        apikey: ENV.SUPABASE_SERVICE_KEY,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to load batch config: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const config = data[0];
+
+  return {
+    upload_type: config?.upload_type || 'general',
+    job_id: config?.job_id || null,
+    required_skills: config?.required_skills || [],
+    exclude_students: config?.exclude_students ?? false,
+    colleague: config?.colleague || 'Unknown',
+  };
+}
+
+async function recordFilterRejection(
+  batchId: string,
+  fileName: string,
+  filePath: string,
+  filterData: {
+    reason: string;
+    [key: string]: any;
+  }
+): Promise<void> {
+  try {
+    await fetch(`${ENV.SUPABASE_URL}/rest/v1/rejected_documents`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+        apikey: ENV.SUPABASE_SERVICE_KEY,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        batch_id: batchId,
+        file_name: fileName,
+        file_path: filePath,
+        rejection_type: 'filter',
+        rejection_reason: filterData.reason,
+        classification_data: filterData,
+      }),
+    });
+  } catch (error: any) {
+    logger.warn('Failed to record filter rejection', {
+      error: error.message,
+    });
+  }
+}
+
+// ============================================
+// FILE GROUPING & PACK PROCESSING
+// ============================================
+
+interface ProcessedFile {
+  name: string;
+  path: string;
+  rawText: string;
+  classification: ClassificationResult;
+  quickData?: Partial<ParsedCV> & { is_student?: boolean };
+  documentType: "cv" | "cover_letter" | "application" | "supporting_document";
+  packId?: string;
+}
+
+interface CandidatePack {
+  packId: string;
+  identityKey: string; // email (normalized) or phone (normalized) or name (normalized)
+  files: ProcessedFile[];
+  quickData: Partial<ParsedCV> & { is_student?: boolean };
+  combinedRawText: string;
+  documents: Array<{
+    type: string;
+    path: string;
+    name: string;
+    document_type: string;
+  }>;
+}
+
+/**
+ * Normalize name for grouping (lowercase, remove special chars)
+ */
+function normalizeNameForGrouping(name: string | null): string | null {
+  if (!name) return null;
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Group files into candidate packs based on identity extraction
+ */
+function groupFilesIntoPacks(files: ProcessedFile[]): CandidatePack[] {
+  const packMap = new Map<string, CandidatePack>();
+  const orphanedFiles: ProcessedFile[] = [];
+
+  // First pass: Group by email/phone (strongest identifiers)
+  for (const file of files) {
+    if (!file.quickData) continue;
+
+    const email = file.quickData.email && isValidEmail(file.quickData.email)
+      ? file.quickData.email.toLowerCase().trim()
+      : null;
+    const phone = file.quickData.phone ? normalizePhone(file.quickData.phone) : null;
+    const name = normalizeNameForGrouping(file.quickData.full_name);
+
+    // Determine identity key (email > phone > name)
+    let identityKey: string | null = null;
+    if (email && PACK_GROUPING_CONFIG.GROUP_BY_EMAIL) {
+      identityKey = `email:${email}`;
+    } else if (phone && PACK_GROUPING_CONFIG.GROUP_BY_PHONE) {
+      identityKey = `phone:${phone}`;
+    } else if (name && PACK_GROUPING_CONFIG.GROUP_BY_NAME) {
+      identityKey = `name:${name}`;
+    }
+
+    if (!identityKey) {
+      orphanedFiles.push(file);
+      continue;
+    }
+
+    // Get or create pack
+    if (!packMap.has(identityKey)) {
+      const packId = `pack_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      packMap.set(identityKey, {
+        packId,
+        identityKey,
+        files: [],
+        quickData: file.quickData,
+        combinedRawText: "",
+        documents: [],
+      });
+    }
+
+    const pack = packMap.get(identityKey)!;
+    
+    // Merge quickData (prefer non-null values)
+    if (file.quickData.email && !pack.quickData.email) pack.quickData.email = file.quickData.email;
+    if (file.quickData.phone && !pack.quickData.phone) pack.quickData.phone = file.quickData.phone;
+    if (file.quickData.full_name && !pack.quickData.full_name) pack.quickData.full_name = file.quickData.full_name;
+    if (file.quickData.is_student !== undefined) pack.quickData.is_student = file.quickData.is_student;
+    
+    pack.files.push(file);
+    file.packId = pack.packId;
+  }
+
+  // Second pass: Try to match orphaned files by name patterns
+  if (PACK_GROUPING_CONFIG.GROUP_BY_NAME && orphanedFiles.length > 0) {
+    for (const orphan of orphanedFiles) {
+      const orphanName = normalizeNameForGrouping(orphan.quickData?.full_name || null);
+      if (!orphanName) continue;
+
+      // Try to match with existing packs by name
+      let matched = false;
+      for (const [key, pack] of packMap.entries()) {
+        if (key.startsWith("name:")) {
+          const packName = normalizeNameForGrouping(pack.quickData.full_name || null);
+          if (packName && orphanName === packName) {
+            pack.files.push(orphan);
+            orphan.packId = pack.packId;
+            matched = true;
+            break;
+          }
+        }
+      }
+
+      // If no match and allow single-file packs, create new pack
+      if (!matched && PACK_GROUPING_CONFIG.ALLOW_SINGLE_FILE_PACKS) {
+        const orphanPackId = `pack_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const identityKey = `name:${orphanName}`;
+        packMap.set(identityKey, {
+          packId: orphanPackId,
+          identityKey,
+          files: [orphan],
+          quickData: orphan.quickData || {},
+          combinedRawText: "",
+          documents: [],
+        });
+        orphan.packId = orphanPackId;
+      }
+    }
+  }
+
+  // Build documents metadata and combine raw text for each pack
+  const packs: CandidatePack[] = [];
+  for (const pack of packMap.values()) {
+    // Sort files: CV first, then cover letter, then application, then supporting
+    const fileOrder: Record<string, number> = {
+      cv: 0,
+      resume: 0,
+      cover_letter: 1,
+      application: 2,
+      supporting_document: 3,
+    };
+    
+    pack.files.sort((a, b) => {
+      const aOrder = fileOrder[a.documentType] ?? 99;
+      const bOrder = fileOrder[b.documentType] ?? 99;
+      return aOrder - bOrder;
+    });
+
+    // Build documents metadata
+    pack.documents = pack.files.map((file) => ({
+      type: file.documentType,
+      path: file.path,
+      name: file.name,
+      document_type: file.classification.document_type,
+    }));
+
+    // Combine raw text with separators
+    const textParts: string[] = [];
+    for (const file of pack.files) {
+      if (file.rawText && file.rawText.trim()) {
+        textParts.push(`--- ${file.name} (${file.documentType}) ---\n${file.rawText.trim()}\n`);
+      }
+    }
+    pack.combinedRawText = textParts.join("\n\n");
+
+    // Safety check: max files per pack
+    if (pack.files.length <= PACK_GROUPING_CONFIG.MAX_FILES_PER_PACK) {
+      packs.push(pack);
+    } else {
+      logger.warn("Pack exceeds max files, splitting", {
+        packId: pack.packId,
+        fileCount: pack.files.length,
+        maxFiles: PACK_GROUPING_CONFIG.MAX_FILES_PER_PACK,
+      });
+      // Split into multiple packs (take first MAX_FILES_PER_PACK)
+      const splitPack = {
+        ...pack,
+        files: pack.files.slice(0, PACK_GROUPING_CONFIG.MAX_FILES_PER_PACK),
+      };
+      splitPack.documents = splitPack.files.map((file) => ({
+        type: file.documentType,
+        path: file.path,
+        name: file.name,
+        document_type: file.classification.document_type,
+      }));
+      const splitTextParts: string[] = [];
+      for (const file of splitPack.files) {
+        if (file.rawText && file.rawText.trim()) {
+          splitTextParts.push(`--- ${file.name} (${file.documentType}) ---\n${file.rawText.trim()}\n`);
+        }
+      }
+      splitPack.combinedRawText = splitTextParts.join("\n\n");
+      packs.push(splitPack);
+    }
+  }
+
+  return packs;
+}
+
+/**
+ * Determine document type from classification and filename
+ */
+function determineDocumentType(
+  classification: ClassificationResult,
+  fileName: string
+): "cv" | "cover_letter" | "application" | "supporting_document" {
+  const lowerName = fileName.toLowerCase();
+
+  // Check filename patterns first
+  if (lowerName.includes("cover") || lowerName.includes("letter") || classification.document_type === "cover_letter") {
+    return "cover_letter";
+  }
+  if (lowerName.includes("application") || lowerName.includes("app") || classification.document_type === "application") {
+    return "application";
+  }
+  if (classification.document_type === "cv" || classification.document_type === "resume") {
+    return "cv";
+  }
+
+  // Default to supporting_document
+  return "supporting_document";
 }
 
 // ============================================
@@ -193,11 +497,23 @@ export const processCVBatch = task({
       // 5) Mark batch as processing
       await updateBatchStatus(batchId, "processing");
 
+      // Load batch configuration
+      const batchConfig = await loadBatchConfig(batchId);
+      logger.info("✅ Batch configuration loaded", {
+        batchId,
+        uploadType: batchConfig.upload_type,
+        jobId: batchConfig.job_id,
+        requiredSkills: batchConfig.required_skills,
+        excludeStudents: batchConfig.exclude_students,
+        colleague: batchConfig.colleague,
+      });
+
       // Initialize stats
       const stats: BatchStats = {
         total_files: files.length,
         classified: 0,
         rejected_by_classification: 0,
+        rejected_by_filters: 0,
         processed: 0,
         failed: 0,
         held_for_review: 0,
@@ -211,7 +527,13 @@ export const processCVBatch = task({
       const fileStatuses = await getFileProcessingStatuses(batchId);
       const fileStatusMap = new Map(fileStatuses.map(f => [f.file_path, f]));
 
-      // 7) Process each file sequentially
+      // ============================================
+      // PHASE 1: Extract, classify, and quick parse all files
+      // ============================================
+      logger.info("📋 Phase 1: Extracting text and classifying documents", { batchId });
+
+      const processedFiles: ProcessedFile[] = [];
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const correlationId = `${batchId}_${file.name}`;
@@ -245,7 +567,7 @@ export const processCVBatch = task({
             path: file.path,
           });
 
-          // Mark file as processing
+          // Mark file as processing (document_type will be set after classification)
           await updateFileStatus(batchId, file.path, file.name, "processing");
 
           // Validate file size
@@ -283,13 +605,14 @@ export const processCVBatch = task({
             preview: (rawText || "").slice(0, 200),
           });
 
-          // Validate text length
-          if (!rawText || rawText.trim().length < PROCESSING_CONFIG.MIN_TEXT_LENGTH_REQUIRED) {
+          // Validate text length (relaxed for multi-doc support)
+          const minTextLength = Math.min(PROCESSING_CONFIG.MIN_TEXT_LENGTH_REQUIRED, 30); // Allow shorter docs
+          if (!rawText || rawText.trim().length < minTextLength) {
             logger.warn("❌ File has insufficient text - rejecting", {
               correlationId,
               fileName: file.name,
               textLength: rawText?.trim().length || 0,
-              required: PROCESSING_CONFIG.MIN_TEXT_LENGTH_REQUIRED,
+              required: minTextLength,
             });
 
             await updateFileStatus(
@@ -299,61 +622,32 @@ export const processCVBatch = task({
               "failed",
               "Insufficient text content"
             );
-            await recordRejection(
-              batchId,
-              file.name,
-              file.path,
-              {
-                document_type: "other",
-                confidence: 1.0,
-                reasoning: "Insufficient text content",
-                should_process: false,
-                key_indicators: ["insufficient_text"],
-                rejection_reason: "Text too short",
-              }
-            );
+            const rejectionClassification: ClassificationResult = {
+              document_type: "irrelevant",
+              confidence: 1.0,
+              reasoning: "Insufficient text content",
+              should_process: false,
+              key_indicators: ["insufficient_text"],
+              rejection_reason: "Text too short",
+            };
+            await recordRejection(batchId, file.name, file.path, rejectionClassification);
             stats.failed++;
             continue;
           }
 
-          // 🔥 DOCUMENT CLASSIFICATION (cost optimization + security)
+          // 🔥 DOCUMENT CLASSIFICATION
           logger.info("🔍 Classifying document", {
             correlationId,
             fileName: file.name,
           });
 
-          // Quick heuristic check first (free)
-          const heuristic = quickHeuristicCheck(rawText, file.name);
-          logger.info("Heuristic check result", {
-            correlationId,
-            file: file.name,
-            likely_cv: heuristic.likely_cv,
-            confidence: `${(heuristic.confidence * 100).toFixed(1)}%`,
-            reason: heuristic.reason,
-          });
-
-          let classification: ClassificationResult;
-
-          // Only run AI classification if heuristic suggests it might be a CV
-          if (heuristic.likely_cv) {
-            classification = await classifyDocument(rawText, file.name, batchId);
-          } else {
-            // Heuristic strongly indicates non-CV, save AI cost
-            classification = {
-              document_type: "other",
-              confidence: heuristic.confidence,
-              reasoning: `Heuristic pre-filter: ${heuristic.reason}`,
-              should_process: false,
-              key_indicators: ["heuristic_rejection"],
-              rejection_reason: heuristic.reason,
-            };
-          }
-
+          // Always classify (no heuristic pre-filter for multi-doc support)
+          const classification = await classifyDocument(rawText, file.name, batchId);
           stats.classified++;
           classificationResults.push(classification);
 
-          // Reject if not a CV
-          if (!classification.should_process) {
+          // Reject only if truly irrelevant
+          if (!classification.should_process || classification.document_type === "irrelevant") {
             logger.warn("❌ Document rejected by classification", {
               correlationId,
               file: file.name,
@@ -371,77 +665,312 @@ export const processCVBatch = task({
               file.path,
               file.name,
               "rejected",
-              classification.rejection_reason
+              classification.rejection_reason || "Document irrelevant"
             );
 
             continue;
           }
 
-          logger.info("✅ Document classified as CV - processing", {
+          logger.info("✅ Document accepted for processing", {
             correlationId,
             file: file.name,
+            type: classification.document_type,
             confidence: `${(classification.confidence * 100).toFixed(1)}%`,
           });
 
-          // Quick parse for contact info
-          const quickData = await quickParse(rawText);
-          await trackQuickParse(batchId);
+          // Determine document type
+          const documentType = determineDocumentType(classification, file.name);
 
-          logger.info("Quick parse extracted", {
-            correlationId,
-            email: quickData.email || "none",
-            phone: quickData.phone || "none",
-            name: quickData.full_name || "none",
+          // Quick parse for contact info (only for CV/resume to extract identity)
+          let quickData: (Partial<ParsedCV> & { is_student?: boolean }) | undefined;
+          if (documentType === "cv") {
+            quickData = await quickParse(rawText);
+            await trackQuickParse(batchId);
+
+            logger.info("Quick parse extracted", {
+              correlationId,
+              email: quickData.email || "none",
+              phone: quickData.phone || "none",
+              name: quickData.full_name || "none",
+            });
+          } else {
+            // For non-CV documents, try minimal identity extraction
+            const emailMatch = rawText.match(/[\w.-]+@[\w.-]+\.\w+/);
+            const phoneMatch = rawText.match(/(\+?\d[\d\s().-]{8,}\d)/);
+            quickData = {
+              email: emailMatch ? emailMatch[0] : null,
+              phone: phoneMatch ? phoneMatch[0] : null,
+            };
+          }
+
+          // Store processed file
+          processedFiles.push({
+            name: file.name,
+            path: file.path,
+            rawText,
+            classification,
+            quickData,
+            documentType,
           });
 
-          // Check for required contact info
-          const hasEmail = quickData.email && isValidEmail(quickData.email);
-          const hasPhone = quickData.phone && normalizePhone(quickData.phone);
+          // File status updated (document_type stored in processedFiles array, will be written after pack grouping)
 
-          if (PROCESSING_CONFIG.REQUIRE_EMAIL_OR_PHONE && !hasEmail && !hasPhone) {
-            logger.warn("⏸️ Missing contact info - sending to hold queue", {
+        } catch (fileError: any) {
+          logger.error("❌ File processing exception in Phase 1", {
+            correlationId,
+            fileName: file.name,
+            error: fileError.message,
+            stack: fileError.stack,
+          });
+
+          stats.failed++;
+
+          await updateFileStatus(
+            batchId,
+            file.path,
+            file.name,
+            "failed",
+            fileError.message
+          );
+
+          if (PROCESSING_CONFIG.CONTINUE_ON_FILE_ERROR) {
+            continue;
+          } else {
+            throw fileError;
+          }
+        }
+      }
+
+      logger.info("✅ Phase 1 complete", {
+        batchId,
+        totalFiles: files.length,
+        processedFiles: processedFiles.length,
+        rejectedFiles: stats.rejected_by_classification,
+        failedFiles: stats.failed,
+      });
+
+      // ============================================
+      // PHASE 2: Group files into candidate packs
+      // ============================================
+      logger.info("📦 Phase 2: Grouping files into candidate packs", { batchId });
+
+      const packs = groupFilesIntoPacks(processedFiles);
+
+      logger.info("✅ File grouping complete", {
+        batchId,
+        totalPacks: packs.length,
+        totalFiles: processedFiles.length,
+        avgFilesPerPack: packs.length > 0 ? (processedFiles.length / packs.length).toFixed(1) : "0",
+      });
+
+      // ============================================
+      // PHASE 3: Process each candidate pack
+      // ============================================
+      logger.info("🔄 Phase 3: Processing candidate packs", { batchId, packCount: packs.length });
+
+      // Update all file statuses with pack_id and document_type
+      for (const pack of packs) {
+        for (const file of pack.files) {
+          await updateFileStatus(
+            batchId,
+            file.path,
+            file.name,
+            "processing",
+            undefined,
+            undefined,
+            undefined,
+            file.documentType,
+            pack.packId
+          );
+        }
+      }
+
+      // Process each pack
+      for (let packIndex = 0; packIndex < packs.length; packIndex++) {
+        const pack = packs[packIndex];
+        const correlationId = `pack_${pack.packId}`;
+
+        try {
+          logger.info(`📦 Processing pack ${packIndex + 1}/${packs.length}`, {
+            correlationId,
+            packId: pack.packId,
+            fileCount: pack.files.length,
+            identityKey: pack.identityKey,
+          });
+
+          // Find CV file in pack (required for processing)
+          const cvFile = pack.files.find(f => f.documentType === "cv");
+          if (!cvFile) {
+            logger.warn("⚠️ Pack missing CV file - sending to hold queue", {
               correlationId,
-              fileName: file.name,
+              packId: pack.packId,
             });
 
             stats.held_for_review++;
-            await addSingleToHoldQueue(batchId, clientId, {
-              file_name: file.name,
-              file_path: file.path,
-              extracted_name: quickData.full_name,
-              raw_text: rawText,
-              extracted_data: {
-                ...quickData,
-                reason: "missing_contact_info",
-              },
+            await addPackToHoldQueue(batchId, clientId, pack, {
+              reason: "missing_cv_file",
             });
 
-            await updateFileStatus(
-              batchId,
-              file.path,
-              file.name,
-              "complete",
-              undefined,
-              undefined,
-              "Sent to hold queue - missing contact info"
+            // Mark all files as complete (sent to hold queue)
+            for (const file of pack.files) {
+              await updateFileStatus(
+                batchId,
+                file.path,
+                file.name,
+                "complete",
+                undefined,
+                undefined,
+                "Sent to hold queue - missing CV file",
+                file.documentType,
+                pack.packId
+              );
+            }
+
+            continue;
+          }
+
+          // Merge quick data from all files (prioritize CV data)
+          const mergedQuickData = cvFile.quickData || pack.quickData || {};
+          
+          // Merge skills from all files
+          const allSkills = new Set<string>();
+          for (const file of pack.files) {
+            if (file.quickData?.skills && Array.isArray(file.quickData.skills)) {
+              file.quickData.skills.forEach((s: string) => allSkills.add(s));
+            }
+          }
+          mergedQuickData.skills = Array.from(allSkills);
+
+          // PRE-QUALIFICATION FILTERING
+          // Check student status
+          if (batchConfig.exclude_students && mergedQuickData.is_student === true) {
+            logger.warn("❌ Pack rejected by filter - student status", {
+              correlationId,
+              packId: pack.packId,
+            });
+
+            stats.rejected_by_filters++;
+            for (const file of pack.files) {
+              await recordFilterRejection(batchId, file.name, file.path, {
+                reason: "Currently enrolled as student (excluded by filter)",
+                is_student: true,
+                pack_id: pack.packId,
+              });
+
+              await updateFileStatus(
+                batchId,
+                file.path,
+                file.name,
+                "rejected",
+                "Currently enrolled as student",
+                undefined,
+                undefined,
+                file.documentType,
+                pack.packId
+              );
+            }
+
+            continue;
+          }
+
+          // Check required skills
+          if (batchConfig.required_skills.length > 0) {
+            const candidateSkills = mergedQuickData.skills || [];
+            const hasRequiredSkills = batchConfig.required_skills.some(requiredSkill =>
+              candidateSkills.some((skill: string) =>
+                skill.toLowerCase().includes(requiredSkill.toLowerCase())
+              )
             );
+
+            if (!hasRequiredSkills) {
+              const missingSkills = batchConfig.required_skills.filter(req =>
+                !candidateSkills.some((cs: string) => cs.toLowerCase().includes(req.toLowerCase()))
+              );
+
+              logger.warn("❌ Pack rejected by filter - missing required skills", {
+                correlationId,
+                packId: pack.packId,
+                required: batchConfig.required_skills,
+                found: candidateSkills,
+                missing: missingSkills,
+              });
+
+              stats.rejected_by_filters++;
+              for (const file of pack.files) {
+                await recordFilterRejection(batchId, file.name, file.path, {
+                  reason: `Missing required skills: ${missingSkills.join(', ')}`,
+                  required_skills: batchConfig.required_skills,
+                  candidate_skills: candidateSkills,
+                  missing_skills: missingSkills,
+                  pack_id: pack.packId,
+                });
+
+                await updateFileStatus(
+                  batchId,
+                  file.path,
+                  file.name,
+                  "rejected",
+                  `Missing required skills: ${missingSkills.join(', ')}`,
+                  undefined,
+                  undefined,
+                  file.documentType,
+                  pack.packId
+                );
+              }
+
+              continue;
+            }
+          }
+
+          // Check for required contact info
+          const hasEmail = mergedQuickData.email && isValidEmail(mergedQuickData.email);
+          const hasPhone = mergedQuickData.phone && normalizePhone(mergedQuickData.phone);
+
+          if (PROCESSING_CONFIG.REQUIRE_EMAIL_OR_PHONE && !hasEmail && !hasPhone) {
+            logger.warn("⏸️ Pack missing contact info - sending to hold queue", {
+              correlationId,
+              packId: pack.packId,
+            });
+
+            stats.held_for_review++;
+            await addPackToHoldQueue(batchId, clientId, pack, {
+              reason: "missing_contact_info",
+            });
+
+            // Mark all files as complete (sent to hold queue)
+            for (const file of pack.files) {
+              await updateFileStatus(
+                batchId,
+                file.path,
+                file.name,
+                "complete",
+                undefined,
+                undefined,
+                "Sent to hold queue - missing contact info",
+                file.documentType,
+                pack.packId
+              );
+            }
 
             continue;
           }
 
           // Duplicate detection
-          const existingCandidate = await findExistingCandidate(quickData.email, quickData.phone);
+          const existingCandidate = await findExistingCandidate(
+            mergedQuickData.email ?? null,
+            mergedQuickData.phone ?? null
+          );
           const ghlDuplicate = await findExistingGHLContact(
-            quickData.email,
-            quickData.phone,
+            mergedQuickData.email ?? null,
+            mergedQuickData.phone ?? null,
             ghlAccessToken
           );
           await trackGHLCall("search_contact", batchId);
 
           if (existingCandidate || ghlDuplicate) {
-            logger.warn("🔍 Duplicate detected", {
+            logger.warn("🔍 Duplicate detected for pack", {
               correlationId,
-              fileName: file.name,
+              packId: pack.packId,
               supabaseDuplicate: !!existingCandidate,
               ghlDuplicate: !!ghlDuplicate,
             });
@@ -449,62 +978,84 @@ export const processCVBatch = task({
             stats.duplicates_found++;
             stats.held_for_review++;
 
-            await addSingleToHoldQueue(batchId, clientId, {
-              file_name: file.name,
-              file_path: file.path,
-              extracted_name: quickData.full_name,
-              raw_text: rawText,
-              extracted_data: {
-                ...quickData,
-                reason: "duplicate_detected",
-                supabase_duplicate_id: existingCandidate?.id,
-                ghl_duplicate_contact_id: ghlDuplicate,
-              },
+            await addPackToHoldQueue(batchId, clientId, pack, {
+              reason: "duplicate_detected",
+              supabase_duplicate_id: existingCandidate?.id,
+              ghl_duplicate_contact_id: ghlDuplicate,
             });
 
-            await updateFileStatus(
-              batchId,
-              file.path,
-              file.name,
-              "complete",
-              undefined,
-              undefined,
-              "Sent to hold queue - duplicate detected"
-            );
+            // Mark all files as complete (sent to hold queue)
+            for (const file of pack.files) {
+              await updateFileStatus(
+                batchId,
+                file.path,
+                file.name,
+                "complete",
+                undefined,
+                undefined,
+                "Sent to hold queue - duplicate detected",
+                file.documentType,
+                pack.packId
+              );
+            }
 
             continue;
           }
 
-          // Full parse
-          const parsedData = await fullParse(rawText);
-          parsedData.cv_raw_text = rawText;
+          // Full parse on combined pack text
+          logger.info("🔍 Parsing combined pack text", {
+            correlationId,
+            packId: pack.packId,
+            combinedTextLength: pack.combinedRawText.length,
+            fileCount: pack.files.length,
+          });
+
+          const parsedData = await fullParse(pack.combinedRawText);
+          parsedData.documents_raw_text = pack.combinedRawText; // Store combined text
+          parsedData.cv_raw_text = pack.combinedRawText; // Backward compatibility
           await trackFullParse(batchId);
 
           // Merge quick parse contact info (in case full parse missed it)
-          parsedData.email = parsedData.email || quickData.email;
-          parsedData.phone = parsedData.phone || quickData.phone;
-          parsedData.full_name = parsedData.full_name || quickData.full_name;
+          parsedData.email = parsedData.email || (mergedQuickData.email ?? null);
+          parsedData.phone = parsedData.phone || (mergedQuickData.phone ?? null);
+          parsedData.full_name = parsedData.full_name || (mergedQuickData.full_name ?? null);
 
-          logger.info("Full parse complete", {
+          logger.info("Full parse complete for pack", {
             correlationId,
-            fileName: file.name,
+            packId: pack.packId,
             fieldsExtracted: Object.keys(parsedData).filter(k => parsedData[k as keyof ParsedCV]).length,
           });
 
-          // Write to Supabase (fail-safe: always save here first)
+          // Identify CV, cover letter, and other docs from pack
+          const cvFileDoc = pack.files.find(f => f.documentType === "cv");
+          const coverLetterFiles = pack.files.filter(f => f.documentType === "cover_letter");
+          const otherDocsFiles = pack.files.filter(f => 
+            f.documentType === "application" || f.documentType === "supporting_document"
+          );
+
+          // Write to Supabase with documents metadata
           const candidateId = await writeCandidate({
             ...parsedData,
             client_id: clientId || null,
             ghl_contact_id: null,
-            cv_file_path: file.path,
+            cv_file_path: cvFileDoc?.path || null,
+            cover_letter_file_path: coverLetterFiles.length > 0 ? coverLetterFiles[0].path : null,
+            application_docs_file_paths: otherDocsFiles.length > 0 
+              ? otherDocsFiles.map(f => f.path)
+              : null,
+            documents: pack.documents,
+            documents_raw_text: pack.combinedRawText,
             batch_id: batchId,
             status: "pending_ghl_sync",
           });
 
-          logger.info("✅ Candidate saved to Supabase", {
+          logger.info("✅ Candidate saved to Supabase with pack documents", {
             correlationId,
             candidateId,
-            fileName: file.name,
+            packId: pack.packId,
+            cvFile: !!cvFileDoc,
+            coverLetters: coverLetterFiles.length,
+            otherDocs: otherDocsFiles.length,
           });
 
           // Sync to GHL
@@ -534,88 +1085,102 @@ export const processCVBatch = task({
               });
             }
 
-            // Upload CV file to GHL
+            // Upload CV file to GHL (candidate_provided_cv field)
             let cvFileUrl: string | null = null;
-            try {
-              const cvUploadResult = await uploadCVToGHL(
-                ghlContactId,
-                file.path,
-                file.name,
-                ghlAccessToken
-              );
-              await trackGHLCall("upload_file", batchId);
+            if (cvFileDoc) {
+              try {
+                const cvUploadResult = await uploadFileToGHL(
+                  ghlContactId,
+                  cvFileDoc.path,
+                  cvFileDoc.name,
+                  ghlAccessToken
+                );
+                await trackGHLCall("upload_file", batchId);
 
-              cvFileUrl = cvUploadResult.fileUrl || null;
+                cvFileUrl = cvUploadResult.fileUrl || null;
 
-              if (!cvUploadResult.success) {
-                logger.warn("⚠️ CV file upload failed", {
+                if (!cvUploadResult.success) {
+                  logger.warn("⚠️ CV file upload failed", {
+                    correlationId,
+                    ghlContactId,
+                    error: cvUploadResult.error,
+                  });
+                } else {
+                  logger.info("✅ CV file uploaded to GHL", {
+                    correlationId,
+                    ghlContactId,
+                    fileUrl: cvFileUrl,
+                  });
+                }
+              } catch (uploadError: any) {
+                logger.error("❌ CV file upload exception", {
                   correlationId,
                   ghlContactId,
-                  error: cvUploadResult.error,
-                });
-              } else {
-                logger.info("✅ CV file uploaded to GHL", {
-                  correlationId,
-                  ghlContactId,
-                  fileUrl: cvFileUrl,
+                  error: uploadError.message,
                 });
               }
-            } catch (uploadError: any) {
-              logger.error("❌ CV file upload exception", {
-                correlationId,
-                ghlContactId,
-                error: uploadError.message,
-              });
             }
 
-            // Upload cover letter (if exists)
+            // Upload cover letter (cover_letter field) - take first cover letter
             let coverLetterUrl: string | null = null;
-            try {
-              coverLetterUrl = await uploadCoverLetterToGHL(
-                ghlContactId,
-                file.path,
-                ghlAccessToken
-              );
-              if (coverLetterUrl) {
-                await trackGHLCall("upload_file", batchId);
-                logger.info("✅ Cover letter uploaded", {
-                  correlationId,
+            if (coverLetterFiles.length > 0) {
+              try {
+                const clFile = coverLetterFiles[0];
+                const clUploadResult = await uploadFileToGHL(
                   ghlContactId,
-                  fileUrl: coverLetterUrl,
+                  clFile.path,
+                  clFile.name,
+                  ghlAccessToken
+                );
+                if (clUploadResult.success && clUploadResult.fileUrl) {
+                  await trackGHLCall("upload_file", batchId);
+                  coverLetterUrl = clUploadResult.fileUrl;
+                  logger.info("✅ Cover letter uploaded to GHL", {
+                    correlationId,
+                    ghlContactId,
+                    fileUrl: coverLetterUrl,
+                  });
+                }
+              } catch (clError: any) {
+                logger.warn("⚠️ Cover letter upload failed", {
+                  correlationId,
+                  error: clError.message,
                 });
               }
-            } catch (clError: any) {
-              logger.warn("⚠️ Cover letter upload failed", {
-                correlationId,
-                error: clError.message,
-              });
             }
 
-            // Upload other documents (if exists)
+            // Upload other documents (application__other_documents field) - combine if multiple
             let otherDocsUrl: string | null = null;
-            try {
-              otherDocsUrl = await uploadOtherDocsToGHL(
-                ghlContactId,
-                file.path,
-                ghlAccessToken
-              );
-              if (otherDocsUrl) {
-                await trackGHLCall("upload_file", batchId);
-                logger.info("✅ Other documents uploaded", {
-                  correlationId,
+            if (otherDocsFiles.length > 0) {
+              // For now, upload first other doc (can be enhanced to handle multiple)
+              try {
+                const otherDocFile = otherDocsFiles[0];
+                const odUploadResult = await uploadFileToGHL(
                   ghlContactId,
-                  fileUrl: otherDocsUrl,
+                  otherDocFile.path,
+                  otherDocFile.name,
+                  ghlAccessToken
+                );
+                if (odUploadResult.success && odUploadResult.fileUrl) {
+                  await trackGHLCall("upload_file", batchId);
+                  otherDocsUrl = odUploadResult.fileUrl;
+                  logger.info("✅ Other documents uploaded to GHL", {
+                    correlationId,
+                    ghlContactId,
+                    fileUrl: otherDocsUrl,
+                    totalOtherDocs: otherDocsFiles.length,
+                  });
+                }
+              } catch (odError: any) {
+                logger.warn("⚠️ Other documents upload failed", {
+                  correlationId,
+                  error: odError.message,
                 });
               }
-            } catch (odError: any) {
-              logger.warn("⚠️ Other documents upload failed", {
-                correlationId,
-                error: odError.message,
-              });
             }
 
-            // Update GHL contact with all fields + file URLs
-            await updateGHLContact(
+            // Update GHL contact with all fields + file URLs using robust field mapping
+            await updateGHLContactWithMapping(
               ghlContactId,
               parsedData,
               candidateId,
@@ -626,7 +1191,7 @@ export const processCVBatch = task({
             );
             await trackGHLCall("update_contact", batchId);
 
-            logger.info("✅ GHL contact updated with full data", {
+            logger.info("✅ GHL contact updated with full pack data", {
               correlationId,
               ghlContactId,
               cvUploaded: !!cvFileUrl,
@@ -639,24 +1204,33 @@ export const processCVBatch = task({
 
             stats.processed++;
 
-            // Mark file as complete
-            await updateFileStatus(
-              batchId,
-              file.path,
-              file.name,
-              "complete",
-              undefined,
-              candidateId
-            );
+            // Mark all files in pack as complete
+            for (const file of pack.files) {
+              await updateFileStatus(
+                batchId,
+                file.path,
+                file.name,
+                "complete",
+                undefined,
+                candidateId,
+                undefined,
+                file.documentType,
+                pack.packId
+              );
+            }
 
-            logger.info("✅ File processing complete", {
+            logger.info("✅ Pack processing complete", {
               correlationId,
+              packId: pack.packId,
               candidateId,
               ghlContactId,
+              fileCount: pack.files.length,
             });
+
           } catch (ghlError: any) {
-            logger.error("❌ GHL sync failed", {
+            logger.error("❌ GHL sync failed for pack", {
               correlationId,
+              packId: pack.packId,
               error: ghlError.message,
               stack: ghlError.stack,
               candidateId,
@@ -665,50 +1239,63 @@ export const processCVBatch = task({
             // Mark candidate as GHL sync failed (but data is safe in Supabase)
             await updateCandidateGHL(candidateId, null, "ghl_sync_failed");
 
-            // Mark file as complete with warning
-            await updateFileStatus(
-              batchId,
-              file.path,
-              file.name,
-              "complete",
-              `GHL sync failed: ${ghlError.message}`,
-              candidateId
-            );
+            // Mark all files as complete with warning
+            for (const file of pack.files) {
+              await updateFileStatus(
+                batchId,
+                file.path,
+                file.name,
+                "complete",
+                `GHL sync failed: ${ghlError.message}`,
+                candidateId,
+                undefined,
+                file.documentType,
+                pack.packId
+              );
+            }
 
             stats.processed++; // Still count as processed (saved to Supabase)
           }
 
-          // Small delay between files
-          if (i < files.length - 1) {
+          // Small delay between packs
+          if (packIndex < packs.length - 1) {
             await delay(PROCESSING_CONFIG.DELAY_BETWEEN_FILES_MS);
           }
 
-          // Update batch progress
-          await updateBatchProgress(batchId, stats.processed + stats.held_for_review + stats.failed + stats.rejected_by_classification, files.length);
-        } catch (fileError: any) {
-          logger.error("❌ File processing exception", {
+          // Update batch progress (count processed packs)
+          const processedPackCount = packIndex + 1;
+          await updateBatchProgress(batchId, processedPackCount, packs.length);
+
+        } catch (packError: any) {
+          logger.error("❌ Pack processing exception", {
             correlationId,
-            fileName: file.name,
-            error: fileError.message,
-            stack: fileError.stack,
+            packId: pack.packId,
+            error: packError.message,
+            stack: packError.stack,
           });
 
           stats.failed++;
 
-          // Mark file as failed
-          await updateFileStatus(
-            batchId,
-            file.path,
-            file.name,
-            "failed",
-            fileError.message
-          );
+          // Mark all files in pack as failed
+          for (const file of pack.files) {
+            await updateFileStatus(
+              batchId,
+              file.path,
+              file.name,
+              "failed",
+              packError.message,
+              undefined,
+              undefined,
+              file.documentType,
+              pack.packId
+            );
+          }
 
-          // Continue to next file (don't fail entire batch)
+          // Continue to next pack (don't fail entire batch)
           if (PROCESSING_CONFIG.CONTINUE_ON_FILE_ERROR) {
             continue;
           } else {
-            throw fileError;
+            throw packError;
           }
         }
       }
@@ -718,9 +1305,10 @@ export const processCVBatch = task({
         logClassificationStats(classificationResults, batchId);
       }
 
-      // Final batch status
+      // Final batch status - count processed PACKS (not files)
+      const totalProcessedPacks = stats.processed + stats.held_for_review + stats.failed + stats.rejected_by_filters;
       const finalStatus = stats.held_for_review > 0 ? "awaiting_input" : "complete";
-      await updateBatchStatus(batchId, finalStatus, stats.processed + stats.failed + stats.held_for_review + stats.rejected_by_classification);
+      await updateBatchStatus(batchId, finalStatus, totalProcessedPacks);
 
       // Log cost summary
       await logBatchCostSummary(batchId);
@@ -853,7 +1441,7 @@ function stripJsonFences(s: string): string {
   return t;
 }
 
-async function quickParse(rawText: string): Promise<Partial<ParsedCV>> {
+async function quickParse(rawText: string): Promise<Partial<ParsedCV> & { is_student?: boolean }> {
   const sampleText = rawText.substring(0, PROCESSING_CONFIG.MAX_TEXT_LENGTH_FOR_PARSE);
 
   const prompt = `Extract ONLY the following fields from this CV/resume. Return ONLY valid JSON in this exact format:
@@ -861,7 +1449,9 @@ async function quickParse(rawText: string): Promise<Partial<ParsedCV>> {
 {
   "full_name": "string or null",
   "email": "string or null",
-  "phone": "string or null"
+  "phone": "string or null",
+  "is_student": "boolean - true if currently enrolled in education/university/college",
+  "skills": ["array of skill strings - technical skills, programming languages, tools, frameworks"]
 }
 
 CV Text:
@@ -893,12 +1483,25 @@ Return ONLY the JSON object, no other text.`;
   const cleaned = stripJsonFences(rawOutput);
 
   try {
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    return {
+      full_name: parsed.full_name || null,
+      email: parsed.email || null,
+      phone: parsed.phone || null,
+      is_student: parsed.is_student ?? false,
+      skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+    };
   } catch {
     logger.warn("Failed to parse Gemini quick parse output", {
       outputPreview: truncateForLog(cleaned, 500),
     });
-    return { full_name: null, email: null, phone: null };
+    return { 
+      full_name: null, 
+      email: null, 
+      phone: null,
+      is_student: false,
+      skills: []
+    };
   }
 }
 
@@ -1238,6 +1841,56 @@ async function createGHLContact(data: ParsedCV, accessToken: string): Promise<st
   throw new Error("GHL contact creation failed after trying payload variants");
 }
 
+/**
+ * Update GHL contact with robust field mapping (key -> ID)
+ */
+async function updateGHLContactWithMapping(
+  contactId: string,
+  data: ParsedCV,
+  candidateId: string | undefined,
+  cvFileUrl: string | null | undefined,
+  coverLetterUrl: string | null | undefined,
+  otherDocsUrl: string | null | undefined,
+  accessToken: string
+): Promise<void> {
+  // Build custom fields data (key-value pairs)
+  const customFieldsData = buildCompleteGHLCustomFields(
+    data,
+    candidateId,
+    cvFileUrl,
+    coverLetterUrl,
+    otherDocsUrl
+  );
+
+  // Map fields to GHL format (key -> ID if available)
+  const mappedFields = await mapFieldsToGHLFormat(customFieldsData, accessToken);
+
+  logger.info("Updating GHL contact with mapped fields", {
+    contactId,
+    fieldCount: mappedFields.length,
+    usingIds: mappedFields.filter(f => f.id).length,
+    usingKeys: mappedFields.filter(f => f.key).length,
+  });
+
+  const response = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Version: GHL_CONFIG.API_VERSION,
+    },
+    body: JSON.stringify({ customFields: mappedFields }),
+  });
+
+  if (!response.ok) {
+    const txt = await response.text();
+    throw new Error(`GHL contact update failed: ${txt.slice(0, 800)}`);
+  }
+}
+
+/**
+ * Legacy updateGHLContact (backward compatibility)
+ */
 async function updateGHLContact(
   contactId: string,
   data: ParsedCV,
@@ -1247,33 +1900,15 @@ async function updateGHLContact(
   otherDocsUrl: string | null | undefined,
   accessToken: string
 ): Promise<void> {
-  const customFieldsData = buildCompleteGHLCustomFields(
+  return updateGHLContactWithMapping(
+    contactId,
     data,
     candidateId,
     cvFileUrl,
     coverLetterUrl,
-    otherDocsUrl
+    otherDocsUrl,
+    accessToken
   );
-
-  const customFields = Object.entries(customFieldsData).map(([key, value]) => ({
-    key,
-    value: value || "",
-  }));
-
-  const response = await fetch(`${GHL_CONFIG.BASE_URL}/contacts/${contactId}`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      Version: GHL_CONFIG.API_VERSION,
-    },
-    body: JSON.stringify({ customFields }),
-  });
-
-  if (!response.ok) {
-    const txt = await response.text();
-    throw new Error(`GHL contact update failed: ${txt.slice(0, 800)}`);
-  }
 }
 
 // ============================================
@@ -1295,16 +1930,16 @@ function encodeStoragePath(path: string): string {
 }
 
 /**
- * Upload CV file to GHL and return file URL
+ * Generic file upload to GHL - works for CV, cover letter, or other documents
  */
-async function uploadCVToGHL(
+async function uploadFileToGHL(
   contactId: string,
-  cvFilePath: string,
+  filePath: string,
   originalFilename: string,
   accessToken: string
 ): Promise<{ success: boolean; fileUrl?: string; error?: string }> {
   try {
-    const encodedPath = encodeStoragePath(cvFilePath);
+    const encodedPath = encodeStoragePath(filePath);
     const downloadUrl = `${ENV.SUPABASE_URL}/storage/v1/object/${SUPABASE_CONFIG.STORAGE_BUCKET}/${encodedPath}`;
 
     const downloadResponse = await fetch(downloadUrl, {
@@ -1316,7 +1951,7 @@ async function uploadCVToGHL(
 
     if (!downloadResponse.ok) {
       const t = await downloadResponse.text();
-      throw new Error(`Failed to download CV: ${downloadResponse.status} - ${t.slice(0, 300)}`);
+      throw new Error(`Failed to download file: ${downloadResponse.status} - ${t.slice(0, 300)}`);
     }
 
     const fileBuffer = await downloadResponse.arrayBuffer();
@@ -1334,7 +1969,6 @@ async function uploadCVToGHL(
     formData.append("file", blob, originalFilename);
     formData.append("name", originalFilename);
 
-    // FIXED: Correct endpoint for media upload
     const uploadResponse = await fetch(`${GHL_CONFIG.BASE_URL}/medias/upload-file`, {
       method: "POST",
       headers: {
@@ -1347,7 +1981,7 @@ async function uploadCVToGHL(
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
       throw new Error(
-        `GHL CV upload failed: ${uploadResponse.status} - ${errorText.slice(0, 800)}`
+        `GHL file upload failed: ${uploadResponse.status} - ${errorText.slice(0, 800)}`
       );
     }
 
@@ -1359,8 +1993,9 @@ async function uploadCVToGHL(
       fileUrl,
     };
   } catch (error: any) {
-    logger.error("Failed to upload CV to GHL", {
+    logger.error("Failed to upload file to GHL", {
       contactId,
+      filePath,
       error: error?.message ?? String(error),
     });
 
@@ -1369,6 +2004,18 @@ async function uploadCVToGHL(
       error: error?.message ?? String(error),
     };
   }
+}
+
+/**
+ * Upload CV file to GHL (backward compatibility wrapper)
+ */
+async function uploadCVToGHL(
+  contactId: string,
+  cvFilePath: string,
+  originalFilename: string,
+  accessToken: string
+): Promise<{ success: boolean; fileUrl?: string; error?: string }> {
+  return uploadFileToGHL(contactId, cvFilePath, originalFilename, accessToken);
 }
 
 /**
@@ -1633,8 +2280,8 @@ async function updateBatchStatus(
 
 async function updateBatchProgress(
   batchId: string,
-  processed: number,
-  _total: number
+  processedCount: number,
+  totalCount: number
 ): Promise<void> {
   const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/processing_batches?id=eq.${batchId}`, {
     method: "PATCH",
@@ -1644,7 +2291,10 @@ async function updateBatchProgress(
       "Content-Type": "application/json",
       Prefer: "return=minimal",
     },
-    body: JSON.stringify({ processed_count: processed }),
+    body: JSON.stringify({ 
+      processed_count: processedCount,
+      // Optionally store total for progress calculation
+    }),
   });
 
   if (!response.ok) {
@@ -1653,26 +2303,47 @@ async function updateBatchProgress(
   }
 }
 
-async function addSingleToHoldQueue(
+async function addPackToHoldQueue(
   batchId: string,
   clientId: string,
-  item: {
-    file_name: string;
-    file_path: string;
-    extracted_name: string | null;
-    raw_text: string;
-    extracted_data?: any;
+  pack: CandidatePack,
+  extraData: {
+    reason: string;
+    supabase_duplicate_id?: string;
+    ghl_duplicate_contact_id?: string;
   }
 ): Promise<string> {
+  // Build documents array for hold_queue
+  const documents = pack.files.map((file) => ({
+    type: file.documentType,
+    path: file.path,
+    name: file.name,
+    document_type: file.classification.document_type,
+    extracted_text_preview: file.rawText.substring(0, 500), // Preview for UI
+  }));
+
+  // Find CV file for cv_file_path (backward compatibility)
+  const cvFile = pack.files.find(f => f.documentType === "cv");
+  const extractedName = pack.quickData.full_name || cvFile?.quickData?.full_name || null;
+
   const record = {
     batch_id: batchId,
     client_id: clientId,
-    extracted_name: item.extracted_name,
-    cv_file_path: item.file_path,
-    cv_raw_text: item.raw_text,
+    extracted_name: extractedName,
+    cv_file_path: cvFile?.path || pack.files[0]?.path || null, // Primary CV path for backward compat
+    cv_raw_text: pack.combinedRawText.substring(0, 50000), // Store preview in cv_raw_text for backward compat
+    documents_raw_text: pack.combinedRawText, // Full combined text
+    documents: documents, // JSONB array of all documents
     status: "pending",
-    extraction_data: item.extracted_data || null,
-    file_name: item.file_name,
+    extraction_data: {
+      ...pack.quickData,
+      reason: extraData.reason,
+      supabase_duplicate_id: extraData.supabase_duplicate_id,
+      ghl_duplicate_contact_id: extraData.ghl_duplicate_contact_id,
+      pack_id: pack.packId,
+      identity_key: pack.identityKey,
+    },
+    file_name: cvFile?.name || pack.files[0]?.name || "unknown", // Primary file name for backward compat
   };
 
   const response = await fetch(`${ENV.SUPABASE_URL}/rest/v1/hold_queue`, {
@@ -1688,16 +2359,18 @@ async function addSingleToHoldQueue(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed to add to hold queue: ${errorText.slice(0, 800)}`);
+    throw new Error(`Failed to add pack to hold queue: ${errorText.slice(0, 800)}`);
   }
 
   const result = await response.json();
   const insertedId = result?.[0]?.id;
 
-  logger.info("Added to hold_queue", {
+  logger.info("Added pack to hold_queue", {
     id: insertedId,
-    file: item.file_name,
+    packId: pack.packId,
+    fileCount: pack.files.length,
     batchId,
+    reason: extraData.reason,
   });
 
   return insertedId;
@@ -1755,7 +2428,9 @@ async function updateFileStatus(
   status: "pending" | "processing" | "complete" | "failed" | "rejected",
   errorMessage?: string,
   candidateId?: string,
-  notes?: string
+  notes?: string,
+  documentType?: string,
+  packId?: string
 ): Promise<void> {
   const record: any = {
     batch_id: batchId,
@@ -1768,6 +2443,8 @@ async function updateFileStatus(
   if (errorMessage) record.error_message = errorMessage;
   if (candidateId) record.candidate_id = candidateId;
   if (notes) record.notes = notes;
+  if (documentType) record.document_type = documentType;
+  if (packId) record.pack_id = packId;
   if (status === "complete" || status === "failed" || status === "rejected") {
     record.processed_at = new Date().toISOString();
   }
@@ -1903,7 +2580,7 @@ async function listBatchFiles(
   const encodedPrefix = encodeURIComponent(prefix);
 
   const response = await fetch(
-    `${ENV.SUPABASE_URL}/storage/v1/object/list/${SUPABASE_CONFIG.STORAGE_BUCKET}?prefix=${encodedPrefix}`,
+    `${ENV.SUPABASE_URL}/storage/v1/object/list/${SUPABASE_CONFIG.STORAGE_BUCKET}?prefix=${encodedPrefix}&limit=1000`,
     {
       headers: {
         Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
@@ -1918,12 +2595,17 @@ async function listBatchFiles(
 
   const files = await response.json();
 
-  // Filter out directories and only include CV files (not in subfolders)
+  // Include ALL files (root level and subfolders) - they will be grouped into packs
+  // Filter only by allowed extensions
   return files
     .filter((f: any) => {
-      const relativePath = f.name.replace(prefix, "");
-      const isInSubfolder = relativePath.includes("/");
-      return !isInSubfolder && VALIDATION_RULES.ALLOWED_EXTENSIONS.some(ext => f.name.toLowerCase().endsWith(ext));
+      // Exclude directories (files with no extension or ending in /)
+      if (!f.name || f.name.endsWith("/")) return false;
+      
+      // Check if has allowed extension
+      return VALIDATION_RULES.ALLOWED_EXTENSIONS.some(ext => 
+        f.name.toLowerCase().endsWith(ext.toLowerCase())
+      );
     })
     .map((f: any) => ({
       name: f.name.split("/").pop(),

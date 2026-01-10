@@ -1,0 +1,1776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Candidate Application Uploader | Hexona</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg-primary:#0f1419;
+      --bg-secondary:#1a1f2e;
+      --bg-card:#1e2433;
+      --bg-hover:#252b3b;
+      --border:#2d3548;
+      --border-light:#3a4355;
+      --text-primary:#ffffff;
+      --text-secondary:#b4bcd0;
+      --text-muted:#7d8590;
+      --accent:#0078d4;
+      --accent-hover:#106ebe;
+      --accent-light:#4da3ff;
+      --success:#0f7b0f;
+      --success-light:#13a10e;
+      --warning:#f7b500;
+      --error:#e74856;
+      --info:#0078d4;
+      
+      --radius-sm:4px;
+      --radius-md:6px;
+      --radius-lg:8px;
+      
+      --shadow:0 1px 3px rgba(0,0,0,.2);
+      --shadow-md:0 2px 6px rgba(0,0,0,.25);
+    }
+
+    *{box-sizing:border-box;margin:0;padding:0}
+    
+    body{
+      font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      background:var(--bg-primary);
+      color:var(--text-primary);
+      min-height:100vh;
+      line-height:1.5;
+      font-size:14px;
+      -webkit-font-smoothing:antialiased;
+    }
+
+    .demo-badge{
+      position:fixed;
+      top:16px;
+      right:16px;
+      padding:6px 12px;
+      background:var(--accent);
+      border-radius:var(--radius-sm);
+      font-size:11px;
+      font-weight:600;
+      letter-spacing:0.5px;
+      text-transform:uppercase;
+      z-index:10000;
+    }
+
+    .container{
+      max-width:1600px;
+      margin:0 auto;
+      padding:24px 24px 60px;
+    }
+
+    /* Header */
+    .header{
+      margin-bottom:24px;
+      padding-bottom:16px;
+      border-bottom:1px solid var(--border);
+    }
+    .header h1{
+      font-size:24px;
+      font-weight:600;
+      letter-spacing:-0.3px;
+    }
+
+    /* Phase Pills */
+    .phase-container{
+      background:var(--bg-card);
+      border:1px solid var(--border);
+      border-radius:var(--radius-lg);
+      padding:12px 16px;
+      margin-bottom:24px;
+    }
+    .phase-pills{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .phase-pill{
+      padding:6px 12px;
+      background:transparent;
+      border:1px solid transparent;
+      border-radius:var(--radius-sm);
+      font-size:12px;
+      font-weight:500;
+      color:var(--text-muted);
+      transition:all .2s ease;
+      cursor:default;
+      white-space:nowrap;
+    }
+    .phase-pill.active{
+      border-color:var(--accent);
+      background:rgba(0,120,212,.1);
+      color:var(--accent-light);
+    }
+    .phase-pill.done{
+      background:rgba(15,123,15,.1);
+      color:var(--success-light);
+    }
+
+    /* Grid */
+    .grid{
+      display:grid;
+      grid-template-columns:1fr;
+      gap:20px;
+    }
+    @media(min-width:1400px){
+      .grid.two{grid-template-columns:1fr 340px}
+    }
+
+    /* Cards */
+    .card{
+      background:var(--bg-card);
+      border:1px solid var(--border);
+      border-radius:var(--radius-lg);
+      padding:20px;
+      box-shadow:var(--shadow);
+    }
+
+    .card-title{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:20px;
+      padding-bottom:16px;
+      border-bottom:1px solid var(--border);
+    }
+    .card-title h2{
+      font-size:16px;
+      font-weight:600;
+      color:var(--text-primary);
+    }
+    .card-title .meta{
+      font-size:11px;
+      color:var(--text-muted);
+      padding:4px 8px;
+      background:var(--bg-secondary);
+      border-radius:var(--radius-sm);
+      font-weight:500;
+      text-transform:uppercase;
+      letter-spacing:0.5px;
+    }
+
+    /* Pills */
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:4px 10px;
+      border-radius:var(--radius-sm);
+      border:1px solid var(--border);
+      background:var(--bg-secondary);
+      color:var(--text-secondary);
+      font-size:12px;
+      font-weight:500;
+    }
+    .pill.success{
+      border-color:rgba(15,123,15,.3);
+      background:rgba(15,123,15,.1);
+      color:var(--success-light);
+    }
+    .pill.warning{
+      border-color:rgba(247,181,0,.3);
+      background:rgba(247,181,0,.1);
+      color:var(--warning);
+    }
+    .pill.error{
+      border-color:rgba(231,72,86,.3);
+      background:rgba(231,72,86,.1);
+      color:var(--error);
+    }
+
+    /* Forms */
+    .form-grid{
+      display:grid;
+      grid-template-columns:1fr;
+      gap:16px;
+      margin-bottom:16px;
+    }
+
+    label{
+      display:block;
+      font-size:12px;
+      font-weight:600;
+      color:var(--text-secondary);
+      margin-bottom:6px;
+    }
+    .required{color:var(--error)}
+
+    select,input[type="text"],input[type="email"],input[type="tel"],textarea{
+      width:100%;
+      padding:8px 12px;
+      border-radius:var(--radius-sm);
+      border:1px solid var(--border);
+      background:var(--bg-secondary);
+      color:var(--text-primary);
+      font-size:13px;
+      font-weight:400;
+      font-family:inherit;
+      transition:all .2s ease;
+    }
+    select:hover,input:hover,textarea:hover{
+      border-color:var(--border-light);
+    }
+    select:focus,input:focus,textarea:focus{
+      outline:none;
+      border-color:var(--accent);
+      box-shadow:0 0 0 1px var(--accent);
+    }
+    textarea{
+      resize:vertical;
+      min-height:80px;
+      line-height:1.5;
+    }
+
+    /* Checkbox */
+    .checkbox-group{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      margin-bottom:16px;
+    }
+    .checkbox{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding:10px 12px;
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:var(--radius-sm);
+      cursor:pointer;
+      transition:all .2s ease;
+    }
+    .checkbox:hover{
+      border-color:var(--border-light);
+      background:var(--bg-hover);
+    }
+    .checkbox input{
+      width:16px;
+      height:16px;
+      cursor:pointer;
+      accent-color:var(--accent);
+    }
+    .checkbox-label{
+      flex:1;
+      font-weight:500;
+      font-size:13px;
+    }
+    .checkbox-desc{
+      font-size:12px;
+      color:var(--text-muted);
+      margin-top:2px;
+    }
+
+    /* Radio */
+    .radio-group{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:12px;
+    }
+    .radio{
+      border:1px solid var(--border);
+      background:var(--bg-secondary);
+      border-radius:var(--radius-md);
+      padding:12px;
+      cursor:pointer;
+      transition:all .2s ease;
+      position:relative;
+      text-align:center;
+    }
+    .radio:hover{
+      border-color:var(--border-light);
+      background:var(--bg-hover);
+    }
+    .radio input{
+      position:absolute;
+      opacity:0;
+    }
+    .radio.selected{
+      border-color:var(--accent);
+      background:rgba(0,120,212,.08);
+    }
+    .radio .rt{
+      font-weight:600;
+      color:var(--text-primary);
+      font-size:13px;
+    }
+
+    /* Dropzone */
+    .dropzone{
+      border:2px dashed var(--border);
+      background:var(--bg-secondary);
+      border-radius:var(--radius-md);
+      padding:40px 24px;
+      text-align:center;
+      cursor:pointer;
+      transition:all .2s ease;
+      margin:16px 0;
+    }
+    .dropzone:hover{
+      border-color:var(--accent);
+      background:rgba(0,120,212,.05);
+    }
+    .dropzone h3{
+      font-size:14px;
+      font-weight:600;
+      margin-bottom:6px;
+    }
+    .dropzone p{
+      color:var(--text-secondary);
+      font-size:12px;
+      margin-bottom:8px;
+    }
+
+    /* Buttons */
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:6px;
+      padding:8px 16px;
+      border-radius:var(--radius-sm);
+      border:1px solid var(--border);
+      background:var(--bg-secondary);
+      color:var(--text-primary);
+      font-weight:500;
+      font-size:13px;
+      cursor:pointer;
+      transition:all .2s ease;
+      font-family:inherit;
+    }
+    .btn:hover:not(:disabled){
+      background:var(--bg-hover);
+      border-color:var(--border-light);
+    }
+    .btn:active:not(:disabled){
+      transform:scale(.98);
+    }
+    .btn:disabled{
+      opacity:.5;
+      cursor:not-allowed;
+    }
+    .btn.primary{
+      background:var(--accent);
+      border-color:var(--accent);
+      color:#ffffff;
+    }
+    .btn.primary:hover:not(:disabled){
+      background:var(--accent-hover);
+      border-color:var(--accent-hover);
+    }
+    .btn.success{
+      background:var(--success);
+      border-color:var(--success);
+      color:#ffffff;
+    }
+    .btn.success:hover:not(:disabled){
+      background:var(--success-light);
+    }
+    .btn.danger{
+      background:var(--error);
+      border-color:var(--error);
+      color:#ffffff;
+    }
+    .btn.danger:hover:not(:disabled){
+      background:#c42b1c;
+    }
+    .btn.warning{
+      background:var(--warning);
+      border-color:var(--warning);
+      color:#000;
+    }
+    .btn.small{
+      padding:5px 12px;
+      font-size:12px;
+    }
+    .btn.ghost{
+      background:transparent;
+      border-color:var(--border);
+    }
+
+    /* Progress Bar */
+    .progress-bar-container{
+      margin:16px 0;
+      padding:12px;
+      background:var(--bg-secondary);
+      border-radius:var(--radius-md);
+      border:1px solid var(--border);
+    }
+    .progress-bar-header{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:8px;
+    }
+    .progress-bar-title{
+      font-size:12px;
+      font-weight:600;
+      color:var(--text-secondary);
+    }
+    .progress-bar{
+      height:8px;
+      background:var(--bg-card);
+      border-radius:4px;
+      overflow:hidden;
+    }
+    .progress-bar .fill{
+      height:100%;
+      background:var(--accent);
+      width:0%;
+      transition:width .3s ease;
+    }
+
+    /* KPI Grid */
+    .kpi-grid{
+      display:grid;
+      grid-template-columns:repeat(2,1fr);
+      gap:10px;
+      margin:16px 0;
+    }
+    .kpi{
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:var(--radius-md);
+      padding:12px;
+      text-align:center;
+    }
+    .kpi .v{
+      font-size:24px;
+      font-weight:600;
+      color:var(--accent-light);
+      margin-bottom:4px;
+      line-height:1;
+    }
+    .kpi .l{
+      font-size:11px;
+      color:var(--text-muted);
+      font-weight:500;
+      text-transform:uppercase;
+      letter-spacing:0.5px;
+    }
+
+    /* Tables */
+    .table-container{
+      border:1px solid var(--border);
+      border-radius:var(--radius-md);
+      overflow:hidden;
+      margin:16px 0;
+      max-height:500px;
+      overflow-y:auto;
+    }
+    .table{
+      width:100%;
+      border-collapse:collapse;
+      background:var(--bg-secondary);
+    }
+    .table th,.table td{
+      padding:10px 12px;
+      text-align:left;
+      border-bottom:1px solid var(--border);
+    }
+    .table th{
+      background:var(--bg-card);
+      font-size:11px;
+      font-weight:600;
+      text-transform:uppercase;
+      letter-spacing:0.5px;
+      color:var(--text-muted);
+      position:sticky;
+      top:0;
+      z-index:10;
+    }
+    .table td{
+      font-size:13px;
+      color:var(--text-secondary);
+    }
+    .table tbody tr:hover{
+      background:var(--bg-hover);
+    }
+
+    .doc-list{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .doc-item{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      padding:6px 10px;
+      background:var(--bg-card);
+      border:1px solid var(--border);
+      border-radius:var(--radius-sm);
+      font-size:12px;
+      cursor:pointer;
+      transition:all .2s ease;
+    }
+    .doc-item:hover{
+      border-color:var(--accent);
+      background:rgba(0,120,212,.1);
+    }
+    .doc-item .icon{
+      font-size:16px;
+    }
+    .doc-item .name{
+      flex:1;
+      color:var(--text-secondary);
+    }
+
+    /* Review Card */
+    .review-card{
+      background:var(--bg-secondary);
+      border:1px solid var(--warning);
+      border-radius:var(--radius-md);
+      padding:16px;
+      margin-bottom:16px;
+    }
+    .review-header{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:12px;
+      padding-bottom:12px;
+      border-bottom:1px solid var(--border);
+    }
+    .review-name{
+      font-size:14px;
+      font-weight:600;
+    }
+    .review-fields{
+      display:grid;
+      grid-template-columns:1fr 1fr 1fr;
+      gap:12px;
+      margin-bottom:12px;
+    }
+    .review-docs{
+      margin-bottom:12px;
+      padding:10px;
+      background:var(--bg-card);
+      border-radius:var(--radius-sm);
+      border:1px solid var(--border);
+    }
+    .review-docs-label{
+      font-size:11px;
+      font-weight:600;
+      color:var(--text-muted);
+      margin-bottom:8px;
+      text-transform:uppercase;
+      letter-spacing:0.5px;
+    }
+    .review-actions{
+      display:flex;
+      gap:8px;
+      justify-content:flex-end;
+    }
+
+    /* Event Log */
+    .event-log{
+      max-height:400px;
+      overflow-y:auto;
+    }
+    .event{
+      display:flex;
+      gap:10px;
+      padding:10px;
+      margin-bottom:6px;
+      background:var(--bg-secondary);
+      border-radius:var(--radius-sm);
+      border:1px solid var(--border);
+      transition:all .2s ease;
+    }
+    .event:hover{
+      background:var(--bg-hover);
+    }
+    .event .icon{
+      font-size:16px;
+      flex-shrink:0;
+      width:32px;
+      height:32px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background:var(--bg-card);
+      border-radius:var(--radius-sm);
+    }
+    .event .content{
+      flex:1;
+    }
+    .event .time{
+      font-size:10px;
+      color:var(--text-muted);
+      margin-bottom:3px;
+      font-weight:500;
+    }
+    .event .text{
+      font-size:12px;
+      color:var(--text-secondary);
+      line-height:1.4;
+    }
+
+    /* Modal */
+    .overlay{
+      position:fixed;
+      inset:0;
+      background:rgba(0,0,0,.75);
+      backdrop-filter:blur(4px);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      z-index:9999;
+      padding:24px;
+    }
+    .overlay.show{
+      display:flex;
+    }
+    .modal{
+      width:min(800px,100%);
+      max-height:90vh;
+      overflow:auto;
+      background:var(--bg-card);
+      border:1px solid var(--border);
+      border-radius:var(--radius-lg);
+      box-shadow:var(--shadow-md);
+    }
+    .modal-head{
+      padding:16px 20px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      border-bottom:1px solid var(--border);
+      background:var(--bg-secondary);
+    }
+    .modal-head h3{
+      font-size:16px;
+      font-weight:600;
+    }
+    .modal-body{
+      padding:20px;
+    }
+    .modal-actions{
+      padding:16px 20px;
+      border-top:1px solid var(--border);
+      background:var(--bg-secondary);
+      display:flex;
+      gap:8px;
+      justify-content:flex-end;
+    }
+
+    /* Status Box */
+    .status-box{
+      padding:10px 12px;
+      background:var(--bg-secondary);
+      border-radius:var(--radius-md);
+      border:1px solid var(--border);
+    }
+    .status-label{
+      font-size:11px;
+      color:var(--text-muted);
+      margin-bottom:6px;
+      font-weight:600;
+      text-transform:uppercase;
+      letter-spacing:0.5px;
+    }
+    .status-value{
+      font-size:13px;
+      font-weight:600;
+      color:var(--accent-light);
+    }
+
+    /* Summary Section */
+    .summary-section{
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:var(--radius-md);
+      padding:20px;
+      margin-bottom:20px;
+    }
+    .summary-actions{
+      display:flex;
+      gap:8px;
+      margin-top:16px;
+      flex-wrap:wrap;
+    }
+
+    .hidden{display:none !important}
+
+    ::-webkit-scrollbar{width:8px;height:8px}
+    ::-webkit-scrollbar-track{background:var(--bg-secondary)}
+    ::-webkit-scrollbar-thumb{background:var(--border-light);border-radius:4px}
+    ::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+
+    @media(max-width:1399px){
+      .form-grid,.radio-group,.review-fields{grid-template-columns:1fr}
+      .kpi-grid{grid-template-columns:repeat(2,1fr)}
+    }
+
+    @media(max-width:768px){
+      .container{padding:16px 16px 40px}
+      .card{padding:16px}
+      .kpi-grid{grid-template-columns:1fr}
+      .summary-actions{flex-direction:column}
+    }
+  </style>
+</head>
+
+<body>
+  <div class="demo-badge">Demo</div>
+
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>Candidate Application Uploader</h1>
+    </div>
+
+    <!-- Phase Pills -->
+    <div class="phase-container">
+      <div class="phase-pills">
+        <div class="phase-pill active" id="pill-setup">Setup Filters</div>
+        <div class="phase-pill" id="pill-upload">Upload Documents</div>
+        <div class="phase-pill" id="pill-screen">Pre-Screen</div>
+        <div class="phase-pill" id="pill-analysis">Analysis</div>
+        <div class="phase-pill" id="pill-review">Review</div>
+        <div class="phase-pill" id="pill-complete">Complete</div>
+      </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="grid two">
+      <!-- Left Column -->
+      <div>
+        <!-- SETUP FILTERS -->
+        <div class="card" id="setupCard">
+          <div class="card-title">
+            <h2>Pre-Qualification Filters</h2>
+            <div class="meta">Step 1</div>
+          </div>
+
+          <label>Upload Type</label>
+          <div class="radio-group">
+            <div class="radio selected" id="radioGeneral">
+              <input type="radio" name="uploadType" value="general" checked/>
+              <div class="rt">General Pool</div>
+            </div>
+            <div class="radio" id="radioSpecific">
+              <input type="radio" name="uploadType" value="specific"/>
+              <div class="rt">Specific Job</div>
+            </div>
+          </div>
+
+          <div id="jobIdField" class="hidden" style="margin-top:16px">
+            <label>Job ID <span class="required">*</span></label>
+            <input type="text" id="jobIdInput" placeholder="e.g., JOB-2025-047"/>
+          </div>
+
+          <div style="margin-top:16px">
+            <label>Required Skills (comma-separated)</label>
+            <textarea id="requiredSkillsInput" placeholder="e.g., Python, React, AWS">Python</textarea>
+          </div>
+
+          <div class="checkbox-group">
+            <label class="checkbox">
+              <input type="checkbox" id="excludeStudents" checked/>
+              <div>
+                <div class="checkbox-label">Exclude Students</div>
+                <div class="checkbox-desc">Reject candidates in education</div>
+              </div>
+            </label>
+          </div>
+
+          <button class="btn primary" id="proceedToUploadBtn" style="width:100%">
+            Proceed to Upload
+          </button>
+        </div>
+
+        <!-- UPLOAD -->
+        <div class="card hidden" id="uploadCard">
+          <div class="card-title">
+            <h2>Upload Application Documents</h2>
+            <div class="meta">Step 2</div>
+          </div>
+
+          <div class="form-grid">
+            <div>
+              <label>Assigned Recruiter <span class="required">*</span></label>
+              <select id="colleagueSelect">
+                <option value="">Select recruiter...</option>
+                <option value="Karen Andrews">Karen Andrews</option>
+                <option value="Oliver Smith">Oliver Smith</option>
+                <option value="Amelia Johnson">Amelia Johnson</option>
+                <option value="James Wilson">James Wilson</option>
+                <option value="Emma Davis">Emma Davis</option>
+              </select>
+            </div>
+          </div>
+
+          <label>Simulated Documents</label>
+          <div class="dropzone" id="dropzone">
+            <h3>Generate Sample Applications</h3>
+            <p>CVs, Cover Letters & Job Board Applications</p>
+            <div style="font-size:11px;color:var(--text-muted)">15 candidate profiles with multiple documents</div>
+          </div>
+
+          <div id="fileCountDisplay" class="hidden" style="text-align:center;margin:12px 0">
+            <span class="pill success">15 Applications Ready (45 documents)</span>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:16px">
+            <button class="btn ghost" id="backToFiltersBtn" style="flex:1">
+              ← Back
+            </button>
+            <button class="btn primary" id="startProcessingBtn" disabled style="flex:2">
+              Start Processing
+            </button>
+          </div>
+        </div>
+
+        <!-- PROGRESS -->
+        <div class="card hidden" id="progressCard">
+          <div class="card-title">
+            <h2 id="progressTitleText">Processing Applications</h2>
+            <div class="meta" id="progressMeta">In Progress</div>
+          </div>
+
+          <div class="progress-bar-container">
+            <div class="progress-bar-header">
+              <div class="progress-bar-title" id="progressText">Initializing...</div>
+              <div style="font-size:11px;color:var(--text-muted);font-weight:500" id="progressStats">0 / 15</div>
+            </div>
+            <div class="progress-bar">
+              <div class="fill" id="progressFill"></div>
+            </div>
+          </div>
+
+          <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+            <div class="kpi">
+              <div class="v" id="statTotal">15</div>
+              <div class="l">Total</div>
+            </div>
+            <div class="kpi">
+              <div class="v" id="statQualified">0</div>
+              <div class="l">Qualified</div>
+            </div>
+            <div class="kpi">
+              <div class="v" id="statRejected">0</div>
+              <div class="l">Rejected</div>
+            </div>
+            <div class="kpi">
+              <div class="v" id="statComplete">0</div>
+              <div class="l">Complete</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- UNSUCCESSFUL CANDIDATES -->
+        <div class="card hidden" id="rejectedCard">
+          <div class="card-title">
+            <h2>Unsuccessful Candidates</h2>
+            <div class="meta"><span id="rejectedCountBadge">0</span> rejected</div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+            <button class="btn danger small" id="sendAllRejectionsBtn">
+              Send All Personalised Rejection Emails
+            </button>
+          </div>
+
+          <div class="table-container">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Reason</th>
+                  <th>Documents</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="rejectedTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- REVIEW QUEUE -->
+        <div class="card hidden" id="reviewCard">
+          <div class="card-title">
+            <h2>Manual Review Required</h2>
+            <div class="meta"><span id="reviewCountBadge">0</span> items</div>
+          </div>
+
+          <div id="reviewContainer"></div>
+
+          <button class="btn primary" id="finishReviewBtn" style="width:100%;margin-top:12px">
+            Complete Review
+          </button>
+        </div>
+
+        <!-- COMPLETION SUMMARY -->
+        <div class="card hidden" id="completionCard">
+          <div class="card-title">
+            <h2>Processing Complete</h2>
+            <div class="meta">Summary</div>
+          </div>
+
+          <div class="summary-section">
+            <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--text-primary)">Batch Summary</h3>
+            
+            <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+              <div class="kpi">
+                <div class="v" style="color:var(--success-light)" id="finalSuccess">0</div>
+                <div class="l">Successful</div>
+              </div>
+              <div class="kpi">
+                <div class="v" style="color:var(--error)" id="finalReject">0</div>
+                <div class="l">Unsuccessful</div>
+              </div>
+              <div class="kpi">
+                <div class="v" style="color:var(--warning)" id="finalSkipped">0</div>
+                <div class="l">Skipped</div>
+              </div>
+            </div>
+
+            <div class="summary-actions">
+              <button class="btn success" id="summaryThankYouBtn" style="flex:1">
+                Send All Thank You Emails
+              </button>
+              <button class="btn danger" id="summaryRejectionsBtn" style="flex:1">
+                Send All Rejection Emails
+              </button>
+              <button class="btn warning" id="reviewSkippedBtn" style="flex:1">
+                Review Skipped
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SUCCESSFUL CANDIDATES -->
+        <div class="card hidden" id="successCard">
+          <div class="card-title">
+            <h2>Successfully Processed and Uploaded to your Contacts</h2>
+            <div class="meta"><span id="successCountBadge">0</span> candidates</div>
+          </div>
+
+          <div class="table-container">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Documents</th>
+                </tr>
+              </thead>
+              <tbody id="successTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- SKIPPED CANDIDATES -->
+        <div class="card hidden" id="skippedCard">
+          <div class="card-title">
+            <h2>Skipped Candidates</h2>
+            <div class="meta"><span id="skippedCountBadge">0</span> skipped</div>
+          </div>
+
+          <div class="table-container">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Reason</th>
+                  <th>Documents</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="skippedTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- FINAL RESET -->
+        <div class="card hidden" id="resetCard">
+          <button class="btn primary" id="resetBtn" style="width:100%">
+            Start New Batch
+          </button>
+        </div>
+      </div>
+
+      <!-- Right Sidebar -->
+      <div>
+        <div class="card">
+          <div class="card-title">
+            <h2>Statistics</h2>
+            <div class="meta">Live</div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi">
+              <div class="v" id="liveProcessed">0</div>
+              <div class="l">Processed</div>
+            </div>
+            <div class="kpi">
+              <div class="v" id="liveSuccess">0</div>
+              <div class="l">Success</div>
+            </div>
+            <div class="kpi">
+              <div class="v" id="liveReview">0</div>
+              <div class="l">Review</div>
+            </div>
+            <div class="kpi">
+              <div class="v" id="liveReject">0</div>
+              <div class="l">Rejected</div>
+            </div>
+          </div>
+
+          <div class="status-box" style="margin-top:12px">
+            <div class="status-label">Current Phase</div>
+            <div class="status-value" id="currentPhase">Setup Filters</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">
+            <h2>Activity</h2>
+            <div class="meta">Live</div>
+          </div>
+
+          <div class="event-log" id="eventLog">
+            <div class="event">
+              <div class="icon">ℹ</div>
+              <div class="content">
+                <div class="time">--:--:--</div>
+                <div class="text">Ready to begin</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Document Preview Modal -->
+  <div class="overlay" id="docOverlay">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="docModalTitle">Document Preview</h3>
+        <button class="btn small ghost" id="docCloseBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="docContent" style="padding:24px;background:var(--bg-secondary);border-radius:var(--radius-md);min-height:200px;text-align:center;color:var(--text-muted)">
+          <p>Document preview would appear here</p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn primary" id="docOkBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Deterministic candidate data
+    const PREDEFINED_CANDIDATES = [
+      // 2 Unsuccessful candidates - ALWAYS filtered
+      { id: 0, firstName: 'Emma', lastName: 'Johnson', isStudent: true, skills: ['Microsoft Office'], yearsExperience: 0, email: 'emma.johnson@example.com', phone: '+44 7123 456789' },
+      { id: 1, firstName: 'Liam', lastName: 'Williams', isStudent: false, skills: ['Java', 'C#'], yearsExperience: 2, email: 'liam.williams@example.com', phone: '+44 7234 567890' },
+      
+      // 1 Missing email
+      { id: 2, firstName: 'Olivia', lastName: 'Brown', isStudent: false, skills: ['Python', 'React'], yearsExperience: 5, email: '', phone: '+44 7345 678901' },
+      
+      // 1 Missing phone
+      { id: 3, firstName: 'Noah', lastName: 'Jones', isStudent: false, skills: ['Python', 'Java', 'Spring Boot'], yearsExperience: 4, email: 'noah.jones@example.com', phone: '' },
+      
+      // 2 Duplicates
+      { id: 4, firstName: 'Ava', lastName: 'Garcia', isStudent: false, skills: ['Python', 'AWS'], yearsExperience: 6, email: 'ava.garcia@newcompany.com', phone: '+44 7567 890123', isDuplicate: true },
+      { id: 5, firstName: 'Elijah', lastName: 'Martinez', isStudent: false, skills: ['Python', 'JavaScript', 'Node.js'], yearsExperience: 3, email: 'elijah.martinez@updated.com', phone: '+44 7678 901234', isDuplicate: true },
+      
+      // 9 Successful candidates
+      { id: 6, firstName: 'Sophia', lastName: 'Rodriguez', isStudent: false, skills: ['Python', 'React', 'AWS'], yearsExperience: 7, email: 'sophia.rodriguez@example.com', phone: '+44 7789 012345' },
+      { id: 7, firstName: 'James', lastName: 'Wilson', isStudent: false, skills: ['Python', 'Java', 'Spring Boot'], yearsExperience: 5, email: 'james.wilson@example.com', phone: '+44 7890 123456' },
+      { id: 8, firstName: 'Isabella', lastName: 'Anderson', isStudent: false, skills: ['Python', 'C#', '.NET'], yearsExperience: 4, email: 'isabella.anderson@example.com', phone: '+44 7901 234567' },
+      { id: 9, firstName: 'Oliver', lastName: 'Taylor', isStudent: false, skills: ['Python', 'JavaScript', 'Node.js', 'React'], yearsExperience: 6, email: 'oliver.taylor@example.com', phone: '+44 7012 345678' },
+      { id: 10, firstName: 'Charlotte', lastName: 'Thomas', isStudent: false, skills: ['Python', 'Django'], yearsExperience: 5, email: 'charlotte.thomas@example.com', phone: '+44 7123 456780' },
+      { id: 11, firstName: 'William', lastName: 'Moore', isStudent: false, skills: ['Python', 'Java', 'Kotlin'], yearsExperience: 4, email: 'william.moore@example.com', phone: '+44 7234 567801' },
+      { id: 12, firstName: 'Amelia', lastName: 'Jackson', isStudent: false, skills: ['Python', 'React', 'TypeScript'], yearsExperience: 3, email: 'amelia.jackson@example.com', phone: '+44 7345 678012' },
+      { id: 13, firstName: 'Benjamin', lastName: 'White', isStudent: false, skills: ['Python', 'Flask', 'AWS'], yearsExperience: 8, email: 'benjamin.white@example.com', phone: '+44 7456 789023' },
+      { id: 14, firstName: 'Mia', lastName: 'Harris', isStudent: false, skills: ['Python', 'JavaScript', 'Vue.js'], yearsExperience: 5, email: 'mia.harris@example.com', phone: '+44 7567 890134' },
+    ];
+
+    const DEMO = {
+      phase: 'setup',
+      colleague: '',
+      uploadType: 'general',
+      jobId: null,
+      requiredSkills: ['Python'],
+      excludeStudents: true,
+      filesReady: false,
+      candidates: [],
+      qualified: [],
+      disqualified: [],
+      needsReview: [],
+      completed: [],
+      skipped: [],
+      stats: { processed: 0, success: 0, review: 0, rejected: 0, skipped: 0 },
+      events: []
+    };
+
+    const $ = id => document.getElementById(id);
+
+    const pills = {
+      setup: $('pill-setup'),
+      upload: $('pill-upload'),
+      screen: $('pill-screen'),
+      analysis: $('pill-analysis'),
+      review: $('pill-review'),
+      complete: $('pill-complete')
+    };
+
+    const cards = {
+      setup: $('setupCard'),
+      upload: $('uploadCard'),
+      progress: $('progressCard'),
+      rejected: $('rejectedCard'),
+      review: $('reviewCard'),
+      success: $('successCard'),
+      skipped: $('skippedCard'),
+      completion: $('completionCard'),
+      reset: $('resetCard')
+    };
+
+    const radioGeneral = $('radioGeneral');
+    const radioSpecific = $('radioSpecific');
+    const jobIdField = $('jobIdField');
+    const jobIdInput = $('jobIdInput');
+    const requiredSkillsInput = $('requiredSkillsInput');
+    const excludeStudents = $('excludeStudents');
+    const proceedToUploadBtn = $('proceedToUploadBtn');
+
+    const colleagueSelect = $('colleagueSelect');
+    const dropzone = $('dropzone');
+    const fileCountDisplay = $('fileCountDisplay');
+    const backToFiltersBtn = $('backToFiltersBtn');
+    const startProcessingBtn = $('startProcessingBtn');
+
+    const progressTitleText = $('progressTitleText');
+    const progressMeta = $('progressMeta');
+    const progressText = $('progressText');
+    const progressStats = $('progressStats');
+    const progressFill = $('progressFill');
+    const statTotal = $('statTotal');
+    const statQualified = $('statQualified');
+    const statRejected = $('statRejected');
+    const statComplete = $('statComplete');
+
+    const rejectedCountBadge = $('rejectedCountBadge');
+    const rejectedTableBody = $('rejectedTableBody');
+    const sendAllRejectionsBtn = $('sendAllRejectionsBtn');
+
+    const reviewCountBadge = $('reviewCountBadge');
+    const reviewContainer = $('reviewContainer');
+    const finishReviewBtn = $('finishReviewBtn');
+
+    const successCountBadge = $('successCountBadge');
+    const successTableBody = $('successTableBody');
+
+    const skippedCountBadge = $('skippedCountBadge');
+    const skippedTableBody = $('skippedTableBody');
+
+    const finalSuccess = $('finalSuccess');
+    const finalReject = $('finalReject');
+    const finalSkipped = $('finalSkipped');
+    const summaryThankYouBtn = $('summaryThankYouBtn');
+    const summaryRejectionsBtn = $('summaryRejectionsBtn');
+    const reviewSkippedBtn = $('reviewSkippedBtn');
+    const resetBtn = $('resetBtn');
+
+    const liveProcessed = $('liveProcessed');
+    const liveSuccess = $('liveSuccess');
+    const liveReview = $('liveReview');
+    const liveReject = $('liveReject');
+    const currentPhase = $('currentPhase');
+    const eventLog = $('eventLog');
+
+    const docOverlay = $('docOverlay');
+    const docModalTitle = $('docModalTitle');
+    const docContent = $('docContent');
+    const docCloseBtn = $('docCloseBtn');
+    const docOkBtn = $('docOkBtn');
+
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const esc = str => {
+      const div = document.createElement('div');
+      div.textContent = str || '';
+      return div.innerHTML;
+    };
+
+    const generateCandidate = (index) => {
+      const base = PREDEFINED_CANDIDATES[index];
+      const full_name = `${base.firstName} ${base.lastName}`;
+
+      const documents = [
+        { type: 'cv', name: `${base.firstName}_${base.lastName}_CV.pdf`, icon: '📄' },
+        { type: 'cover', name: `${base.firstName}_${base.lastName}_CoverLetter.pdf`, icon: '📝' },
+        { type: 'application', name: `JobBoard_Application_${1000 + index}.pdf`, icon: '📋' }
+      ];
+
+      // Check if candidate has required skills
+      const hasRequiredSkills = DEMO.requiredSkills.length === 0 || 
+        DEMO.requiredSkills.some(req => base.skills.some(cs => cs.toLowerCase().includes(req.toLowerCase())));
+
+      const candidate = {
+        id: `cand_${base.id}`,
+        full_name,
+        email: base.email,
+        phone: base.phone,
+        isStudent: base.isStudent,
+        hasRequiredSkills,
+        yearsExperience: base.yearsExperience,
+        skills: base.skills,
+        hasMissingData: !base.email || !base.phone,
+        isDuplicate: base.isDuplicate || false,
+        documents
+      };
+
+      if (candidate.isDuplicate) {
+        candidate.existingRecord = {
+          id: `existing_${5000 + base.id}`,
+          full_name,
+          email: `${base.firstName.toLowerCase()}.${base.lastName.toLowerCase()}@oldcompany.com`,
+          phone: `+44 7${rand(100,999)} ${rand(100000,999999)}`,
+          updated_at: new Date(Date.now() - rand(30,180) * 24*60*60*1000).toISOString()
+        };
+      }
+
+      return candidate;
+    };
+
+    const addEvent = (icon, text) => {
+      const time = new Date().toLocaleTimeString();
+      DEMO.events.unshift({ icon, text, time });
+      if (DEMO.events.length > 30) DEMO.events.pop();
+      renderEventLog();
+    };
+
+    const renderEventLog = () => {
+      eventLog.innerHTML = DEMO.events.map(e => `
+        <div class="event">
+          <div class="icon">${e.icon}</div>
+          <div class="content">
+            <div class="time">${e.time}</div>
+            <div class="text">${esc(e.text)}</div>
+          </div>
+        </div>
+      `).join('');
+    };
+
+    const updateStats = () => {
+      liveProcessed.textContent = DEMO.stats.processed;
+      liveSuccess.textContent = DEMO.stats.success;
+      liveReview.textContent = DEMO.stats.review;
+      liveReject.textContent = DEMO.stats.rejected;
+    };
+
+    const setPhase = (phase) => {
+      DEMO.phase = phase;
+
+      Object.values(pills).forEach(p => p.classList.remove('active', 'done'));
+      Object.values(cards).forEach(c => c.classList.add('hidden'));
+
+      const phaseNames = {
+        setup: 'Setup Filters',
+        upload: 'Upload Documents',
+        screen: 'Pre-Screening',
+        analysis: 'Analysis',
+        review: 'Manual Review',
+        complete: 'Complete'
+      };
+
+      currentPhase.textContent = phaseNames[phase];
+
+      const order = ['setup','upload','screen','analysis','review','complete'];
+      const idx = order.indexOf(phase);
+      
+      order.forEach((p, i) => {
+        if (i < idx) pills[p].classList.add('done');
+        if (i === idx) pills[p].classList.add('active');
+      });
+
+      if (phase === 'setup') {
+        cards.setup.classList.remove('hidden');
+      } else if (phase === 'upload') {
+        cards.upload.classList.remove('hidden');
+      } else if (phase === 'screen' || phase === 'analysis') {
+        cards.progress.classList.remove('hidden');
+        if (DEMO.disqualified.length > 0) cards.rejected.classList.remove('hidden');
+      } else if (phase === 'review') {
+        cards.progress.classList.remove('hidden');
+        cards.rejected.classList.remove('hidden');
+        cards.review.classList.remove('hidden');
+      } else if (phase === 'complete') {
+        cards.completion.classList.remove('hidden');
+        if (DEMO.completed.length > 0) cards.success.classList.remove('hidden');
+        if (DEMO.skipped.length > 0) cards.skipped.classList.remove('hidden');
+        if (DEMO.disqualified.length > 0) cards.rejected.classList.remove('hidden');
+        cards.reset.classList.remove('hidden');
+      }
+
+      updateStats();
+    };
+
+    const validateSetup = () => {
+      DEMO.uploadType = radioSpecific.querySelector('input').checked ? 'specific' : 'general';
+      DEMO.jobId = DEMO.uploadType === 'specific' ? jobIdInput.value.trim() : null;
+
+      const jobOk = DEMO.uploadType !== 'specific' || !!DEMO.jobId;
+
+      proceedToUploadBtn.disabled = !jobOk;
+    };
+
+    jobIdInput.addEventListener('input', validateSetup);
+
+    radioGeneral.addEventListener('click', () => {
+      radioGeneral.classList.add('selected');
+      radioSpecific.classList.remove('selected');
+      radioGeneral.querySelector('input').checked = true;
+      jobIdField.classList.add('hidden');
+      validateSetup();
+    });
+
+    radioSpecific.addEventListener('click', () => {
+      radioSpecific.classList.add('selected');
+      radioGeneral.classList.remove('selected');
+      radioSpecific.querySelector('input').checked = true;
+      jobIdField.classList.remove('hidden');
+      validateSetup();
+    });
+
+    proceedToUploadBtn.addEventListener('click', () => {
+      const skillsText = requiredSkillsInput.value.trim();
+      DEMO.requiredSkills = skillsText ? skillsText.split(',').map(s => s.trim()).filter(Boolean) : [];
+      DEMO.excludeStudents = excludeStudents.checked;
+
+      addEvent('⚙', `Filters configured: ${DEMO.requiredSkills.length ? DEMO.requiredSkills.join(', ') : 'No skills'} ${DEMO.excludeStudents ? '· Students excluded' : ''}`);
+      setPhase('upload');
+    });
+
+    const validateUpload = () => {
+      DEMO.colleague = colleagueSelect.value;
+      const hasColleague = !!DEMO.colleague;
+      const hasFiles = DEMO.filesReady;
+
+      startProcessingBtn.disabled = !(hasColleague && hasFiles);
+    };
+
+    colleagueSelect.addEventListener('change', validateUpload);
+
+    dropzone.addEventListener('click', () => {
+      if (DEMO.filesReady) return;
+
+      DEMO.candidates = [];
+      for (let i = 0; i < 15; i++) {
+        DEMO.candidates.push(generateCandidate(i));
+      }
+
+      DEMO.filesReady = true;
+      fileCountDisplay.classList.remove('hidden');
+      validateUpload();
+      addEvent('📁', 'Generated 15 applications (45 documents)');
+    });
+
+    backToFiltersBtn.addEventListener('click', () => {
+      setPhase('setup');
+    });
+
+    startProcessingBtn.addEventListener('click', async () => {
+      addEvent('▶', `Processing started by ${DEMO.colleague}`);
+      setPhase('screen');
+      await runProcessing();
+    });
+
+    const getDisqualificationReason = (candidate) => {
+      if (candidate.isStudent) {
+        return 'Currently enrolled as a student';
+      }
+      if (!candidate.hasRequiredSkills) {
+        const missingSkills = DEMO.requiredSkills.filter(req => 
+          !candidate.skills.some(cs => cs.toLowerCase().includes(req.toLowerCase()))
+        );
+        return `Missing required skills: ${missingSkills.join(', ')}`;
+      }
+      return 'Does not meet requirements';
+    };
+
+    const runProcessing = async () => {
+      progressTitleText.textContent = 'Pre-Screening Applications';
+      
+      for (let i = 0; i < DEMO.candidates.length; i++) {
+        const candidate = DEMO.candidates[i];
+        
+        progressText.textContent = `Analyzing ${candidate.full_name}...`;
+        progressStats.textContent = `${i + 1} / 15`;
+        progressFill.style.width = `${((i + 1) / 15) * 100}%`;
+
+        await wait(rand(300, 700));
+
+        DEMO.stats.processed++;
+
+        const failsSkills = !candidate.hasRequiredSkills;
+        const failsStudent = DEMO.excludeStudents && candidate.isStudent;
+        const disqualified = failsSkills || failsStudent;
+
+        if (disqualified) {
+          candidate.disqualificationReason = getDisqualificationReason(candidate);
+          DEMO.disqualified.push(candidate);
+          DEMO.stats.rejected++;
+          addEvent('✕', `Disqualified: ${candidate.full_name}`);
+        } else {
+          DEMO.qualified.push(candidate);
+          
+          if (candidate.hasMissingData || candidate.isDuplicate) {
+            DEMO.needsReview.push(candidate);
+            DEMO.stats.review++;
+            addEvent('⚠', `Review: ${candidate.full_name}`);
+          } else {
+            DEMO.completed.push(candidate);
+            DEMO.stats.success++;
+            addEvent('✓', `Processed: ${candidate.full_name}`);
+          }
+        }
+
+        updateStats();
+        statQualified.textContent = DEMO.qualified.length;
+        statRejected.textContent = DEMO.disqualified.length;
+        statComplete.textContent = DEMO.completed.length;
+      }
+
+      renderRejectedTable();
+      renderSuccessTable();
+
+      if (DEMO.needsReview.length > 0) {
+        setPhase('review');
+        renderReviewQueue();
+      } else {
+        setPhase('complete');
+        showCompletion();
+      }
+    };
+
+    const renderDocuments = (docs, candId) => {
+      return `
+        <div class="doc-list">
+          ${docs.map(d => `
+            <div class="doc-item" onclick="showDocument('${candId}', '${d.type}')">
+              <span class="icon">${d.icon}</span>
+              <span class="name">${esc(d.name)}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    };
+
+    const renderRejectedTable = () => {
+      if (DEMO.disqualified.length === 0) return;
+
+      rejectedCountBadge.textContent = DEMO.disqualified.length;
+      cards.rejected.classList.remove('hidden');
+
+      rejectedTableBody.innerHTML = DEMO.disqualified.map(c => `
+        <tr>
+          <td style="font-weight:600">${esc(c.full_name)}</td>
+          <td>
+            <span class="pill error">${esc(c.disqualificationReason)}</span>
+          </td>
+          <td>${renderDocuments(c.documents, c.id)}</td>
+          <td>
+            <button class="btn danger small" onclick="sendRejection('${c.id}')">
+              Send Personalised Rejection Email
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    };
+
+    window.sendRejection = (candId) => {
+      const candidate = DEMO.disqualified.find(c => c.id === candId);
+      if (!candidate) return;
+      
+      addEvent('✉', `Sent personalised rejection to ${candidate.full_name}`);
+      alert(`Personalised rejection email sent to ${candidate.full_name}`);
+    };
+
+    sendAllRejectionsBtn.addEventListener('click', () => {
+      addEvent('✉', `Sent ${DEMO.disqualified.length} personalised rejection emails`);
+      alert(`Sent ${DEMO.disqualified.length} personalised rejection emails`);
+    });
+
+    summaryRejectionsBtn.addEventListener('click', () => {
+      addEvent('✉', `Sent ${DEMO.disqualified.length} personalised rejection emails`);
+      alert(`Sent ${DEMO.disqualified.length} personalised rejection emails`);
+    });
+
+    const renderReviewQueue = () => {
+      reviewCountBadge.textContent = DEMO.needsReview.length;
+
+      if (DEMO.needsReview.length === 0) {
+        reviewContainer.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text-muted)">All clear</div>';
+        return;
+      }
+
+      reviewContainer.innerHTML = DEMO.needsReview.map(c => {
+        if (c.isDuplicate) {
+          return `
+            <div class="review-card">
+              <div class="review-header">
+                <div>
+                  <div class="review-name">${esc(c.full_name)}</div>
+                  <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Duplicate detected - existing record found</div>
+                </div>
+                <span class="pill warning">Duplicate</span>
+              </div>
+              <div class="review-docs">
+                <div class="review-docs-label">Documents</div>
+                ${renderDocuments(c.documents, c.id)}
+              </div>
+              <div class="review-actions">
+                <button class="btn ghost" onclick="skipDuplicate('${c.id}')">Skip</button>
+                <button class="btn primary" onclick="updateDuplicate('${c.id}')">
+                  Update Candidate Record with New Document Contents
+                </button>
+              </div>
+            </div>
+          `;
+        } else {
+          const missingField = !c.email ? 'email' : 'phone';
+          return `
+            <div class="review-card">
+              <div class="review-header">
+                <div>
+                  <div class="review-name">${esc(c.full_name)}</div>
+                  <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Missing ${missingField}</div>
+                </div>
+                <span class="pill warning">Missing Data</span>
+              </div>
+              <div class="review-docs">
+                <div class="review-docs-label">Documents</div>
+                ${renderDocuments(c.documents, c.id)}
+              </div>
+              <div class="review-fields">
+                <div>
+                  <label>Full Name <span class="required">*</span></label>
+                  <input type="text" value="${esc(c.full_name)}" id="name_${c.id}"/>
+                </div>
+                <div>
+                  <label>Email ${!c.email ? '<span class="required">*</span>' : ''}</label>
+                  <input type="email" value="${esc(c.email)}" id="email_${c.id}" placeholder="candidate@example.com"/>
+                </div>
+                <div>
+                  <label>Phone ${!c.phone ? '<span class="required">*</span>' : ''}</label>
+                  <input type="tel" value="${esc(c.phone)}" id="phone_${c.id}" placeholder="+44 7700 900000"/>
+                </div>
+              </div>
+              <div class="review-actions">
+                <button class="btn ghost small" onclick="skipReview('${c.id}')">Skip</button>
+                <button class="btn primary small" onclick="submitReview('${c.id}')">
+                  Save & Update
+                </button>
+              </div>
+            </div>
+          `;
+        }
+      }).join('');
+    };
+
+    window.submitReview = (candId) => {
+      const candidate = DEMO.needsReview.find(c => c.id === candId);
+      if (!candidate) return;
+
+      candidate.full_name = $(`name_${candId}`).value.trim();
+      candidate.email = $(`email_${candId}`).value.trim();
+      candidate.phone = $(`phone_${candId}`).value.trim();
+
+      DEMO.needsReview = DEMO.needsReview.filter(c => c.id !== candId);
+      DEMO.completed.push(candidate);
+      DEMO.stats.review--;
+      DEMO.stats.success++;
+
+      addEvent('✓', `Updated: ${candidate.full_name}`);
+      updateStats();
+      renderReviewQueue();
+      renderSuccessTable();
+
+      if (DEMO.needsReview.length === 0) {
+        setTimeout(() => {
+          setPhase('complete');
+          showCompletion();
+        }, 500);
+      }
+    };
+
+    window.skipReview = (candId) => {
+      const candidate = DEMO.needsReview.find(c => c.id === candId);
+      DEMO.needsReview = DEMO.needsReview.filter(c => c.id !== candId);
+      DEMO.skipped.push(candidate);
+      DEMO.stats.review--;
+      DEMO.stats.skipped++;
+      addEvent('⊘', `Skipped: ${candidate.full_name}`);
+      updateStats();
+      renderReviewQueue();
+      renderSkippedTable();
+
+      if (DEMO.needsReview.length === 0) {
+        setTimeout(() => {
+          setPhase('complete');
+          showCompletion();
+        }, 500);
+      }
+    };
+
+    window.skipDuplicate = (candId) => {
+      const candidate = DEMO.needsReview.find(c => c.id === candId);
+      DEMO.needsReview = DEMO.needsReview.filter(c => c.id !== candId);
+      DEMO.skipped.push(candidate);
+      DEMO.stats.review--;
+      DEMO.stats.skipped++;
+      addEvent('⊘', `Skipped duplicate: ${candidate.full_name}`);
+      updateStats();
+      renderReviewQueue();
+      renderSkippedTable();
+
+      if (DEMO.needsReview.length === 0) {
+        setTimeout(() => {
+          setPhase('complete');
+          showCompletion();
+        }, 500);
+      }
+    };
+
+    window.updateDuplicate = (candId) => {
+      const candidate = DEMO.needsReview.find(c => c.id === candId);
+      DEMO.needsReview = DEMO.needsReview.filter(c => c.id !== candId);
+      if (candidate) DEMO.completed.push(candidate);
+      DEMO.stats.review--;
+      DEMO.stats.success++;
+      addEvent('↻', `Updated record: ${candidate?.full_name}`);
+      updateStats();
+      renderReviewQueue();
+      renderSuccessTable();
+
+      if (DEMO.needsReview.length === 0) {
+        setTimeout(() => {
+          setPhase('complete');
+          showCompletion();
+        }, 500);
+      }
+    };
+
+    finishReviewBtn.addEventListener('click', () => {
+      setPhase('complete');
+      showCompletion();
+    });
+
+    const renderSuccessTable = () => {
+      if (DEMO.completed.length === 0) return;
+
+      successCountBadge.textContent = DEMO.completed.length;
+      cards.success.classList.remove('hidden');
+
+      successTableBody.innerHTML = DEMO.completed.map(c => `
+        <tr>
+          <td style="font-weight:600">${esc(c.full_name)}</td>
+          <td style="font-size:12px">${esc(c.email)}</td>
+          <td>${renderDocuments(c.documents, c.id)}</td>
+        </tr>
+      `).join('');
+    };
+
+    const renderSkippedTable = () => {
+      if (DEMO.skipped.length === 0) return;
+
+      skippedCountBadge.textContent = DEMO.skipped.length;
+      cards.skipped.classList.remove('hidden');
+
+      skippedTableBody.innerHTML = DEMO.skipped.map(c => `
+        <tr>
+          <td style="font-weight:600">${esc(c.full_name)}</td>
+          <td>
+            <span class="pill warning">${c.isDuplicate ? 'Duplicate' : 'Missing Data'}</span>
+          </td>
+          <td>${renderDocuments(c.documents, c.id)}</td>
+          <td>
+            <button class="btn warning small" onclick="reviewSkipped('${c.id}')">
+              Review
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    };
+
+    window.reviewSkipped = (candId) => {
+      const candidate = DEMO.skipped.find(c => c.id === candId);
+      if (!candidate) return;
+      
+      addEvent('📋', `Reviewing skipped candidate: ${candidate.full_name}`);
+      alert(`Review functionality for ${candidate.full_name}`);
+    };
+
+    summaryThankYouBtn.addEventListener('click', () => {
+      addEvent('✉', `Sent ${DEMO.completed.length} thank you emails`);
+      alert(`Sent ${DEMO.completed.length} thank you emails`);
+    });
+
+    reviewSkippedBtn.addEventListener('click', () => {
+      addEvent('📋', `Reviewing ${DEMO.skipped.length} skipped candidates`);
+      alert(`Review ${DEMO.skipped.length} skipped candidates`);
+    });
+
+    window.showDocument = (candId, docType) => {
+      const candidate = [...DEMO.disqualified, ...DEMO.needsReview, ...DEMO.completed, ...DEMO.skipped].find(c => c.id === candId);
+      if (!candidate) return;
+
+      const doc = candidate.documents.find(d => d.type === docType);
+      if (!doc) return;
+
+      const docTypeNames = {
+        cv: 'CV / Resume',
+        cover: 'Cover Letter',
+        application: 'Job Board Application'
+      };
+
+      docModalTitle.textContent = `${docTypeNames[docType]} - ${candidate.full_name}`;
+      docContent.innerHTML = `<p>Preview: ${doc.name}</p>`;
+      docOverlay.classList.add('show');
+    };
+
+    docCloseBtn.addEventListener('click', () => docOverlay.classList.remove('show'));
+    docOkBtn.addEventListener('click', () => docOverlay.classList.remove('show'));
+
+    const showCompletion = () => {
+      finalSuccess.textContent = DEMO.completed.length;
+      finalReject.textContent = DEMO.disqualified.length;
+      finalSkipped.textContent = DEMO.skipped.length;
+
+      renderSuccessTable();
+      renderSkippedTable();
+      renderRejectedTable();
+
+      addEvent('✓', 'Batch complete');
+    };
+
+    resetBtn.addEventListener('click', () => {
+      location.reload();
+    });
+
+    setPhase('setup');
+    validateSetup();
+    updateStats();
+    addEvent('ℹ', 'Ready to begin (Filters: Python required, Students excluded)');
+  </script>
+</body>
+</html>

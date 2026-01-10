@@ -20,7 +20,7 @@ import { trackClassification } from "./costTracker";
 // ============================================
 
 export interface ClassificationResult {
-  document_type: "cv" | "resume" | "invoice" | "letter" | "contract" | "form" | "other";
+  document_type: "cv" | "resume" | "cover_letter" | "application" | "supporting_document" | "irrelevant";
   confidence: number; // 0.0 to 1.0
   reasoning: string;
   should_process: boolean;
@@ -136,7 +136,7 @@ export async function classifyDocument(
   // Validation
   if (!rawText || rawText.trim().length < 50) {
     return {
-      document_type: "other",
+      document_type: "irrelevant",
       confidence: 1.0,
       reasoning: "Document has insufficient text content",
       should_process: false,
@@ -158,19 +158,19 @@ export async function classifyDocument(
     const prompt = `Analyze this document and classify its type. Return ONLY valid JSON in this exact format:
 
 {
-  "document_type": "cv" | "resume" | "invoice" | "letter" | "contract" | "form" | "other",
+  "document_type": "cv" | "resume" | "cover_letter" | "application" | "supporting_document" | "irrelevant",
   "confidence": 0.95,
   "reasoning": "Brief explanation of why this classification was chosen",
   "key_indicators": ["list", "of", "key", "indicators", "found"]
 }
 
 Classification guidelines:
-- "cv" or "resume": Contains work history, education, skills, professional experience
-- "invoice": Contains billing items, amounts, invoice numbers, payment terms
-- "letter": Formal correspondence, cover letter, recommendation letter
-- "contract": Legal terms, agreement clauses, signatures required
-- "form": Application form, survey, questionnaire
-- "other": None of the above
+- "cv" or "resume": Contains work history, education, skills, professional experience, career summary
+- "cover_letter": Application cover letter, motivation letter, introduction letter addressed to employer
+- "application": Job application form, application questionnaire, candidate application submission
+- "supporting_document": Portfolio, certificates, references, work samples, writing samples - relevant to recruitment
+- "irrelevant": Invoice, contract, legal document, unrelated business document, spam, clearly not recruitment-related
+- IMPORTANT: Only classify as "irrelevant" if document is clearly not related to recruitment/candidate application
 
 Document text (first ${sampleText.length} characters):
 ${sampleText}
@@ -210,15 +210,23 @@ Return ONLY the JSON object, no other text.`;
           key_indicators: ["fallback_detection"],
         };
       }
+      if (lowerOutput.includes('"cover_letter"') || lowerOutput.includes('"coverletter"')) {
+        return {
+          document_type: "cover_letter",
+          confidence: 0.6,
+          reasoning: "Classification parsing failed, but detected cover letter indicators",
+          should_process: true,
+          key_indicators: ["fallback_detection"],
+        };
+      }
 
-      // If we can't classify, reject to be safe
+      // If we can't classify, default to supporting_document (don't reject)
       return {
-        document_type: "other",
+        document_type: "supporting_document",
         confidence: 0.5,
-        reasoning: "Classification failed - unable to parse AI response",
-        should_process: false,
+        reasoning: "Classification failed - defaulting to supporting document",
+        should_process: true,
         key_indicators: ["classification_failed"],
-        rejection_reason: "Unable to determine document type",
       };
     }
 
@@ -230,12 +238,11 @@ Return ONLY the JSON object, no other text.`;
       });
 
       return {
-        document_type: "other",
+        document_type: "supporting_document",
         confidence: 0.5,
-        reasoning: "Classification returned invalid structure",
-        should_process: false,
+        reasoning: "Classification returned invalid structure - defaulting to supporting document",
+        should_process: true,
         key_indicators: ["invalid_classification"],
-        rejection_reason: "Invalid classification response",
       };
     }
 
@@ -243,10 +250,17 @@ Return ONLY the JSON object, no other text.`;
     const confidence = Math.min(1.0, Math.max(0.0, classification.confidence));
 
     // Determine if should process
+    // Accept: cv, resume, cover_letter, application, supporting_document
+    // Reject: only irrelevant documents
     const isValidType =
-      classification.document_type === "cv" || classification.document_type === "resume";
+      classification.document_type === "cv" ||
+      classification.document_type === "resume" ||
+      classification.document_type === "cover_letter" ||
+      classification.document_type === "application" ||
+      classification.document_type === "supporting_document";
+    const isIrrelevant = classification.document_type === "irrelevant";
     const meetsConfidenceThreshold = confidence >= CLASSIFICATION_CONFIG.MIN_CONFIDENCE_THRESHOLD;
-    const shouldProcess = isValidType && meetsConfidenceThreshold;
+    const shouldProcess = isValidType && meetsConfidenceThreshold && !isIrrelevant;
 
     // Build result
     const result: ClassificationResult = {
@@ -259,13 +273,11 @@ Return ONLY the JSON object, no other text.`;
         : [],
     };
 
-    // Add rejection reason if not processing
-    if (!shouldProcess) {
-      if (!isValidType) {
-        result.rejection_reason = `Document identified as '${classification.document_type}', not a CV/resume`;
-      } else {
-        result.rejection_reason = `Confidence too low: ${(confidence * 100).toFixed(1)}% (required: ${(CLASSIFICATION_CONFIG.MIN_CONFIDENCE_THRESHOLD * 100).toFixed(0)}%)`;
-      }
+    // Add rejection reason only if truly irrelevant
+    if (!shouldProcess && isIrrelevant) {
+      result.rejection_reason = `Document identified as '${classification.document_type}' - not recruitment related`;
+    } else if (!shouldProcess && !meetsConfidenceThreshold) {
+      result.rejection_reason = `Confidence too low: ${(confidence * 100).toFixed(1)}% (required: ${(CLASSIFICATION_CONFIG.MIN_CONFIDENCE_THRESHOLD * 100).toFixed(0)}%)`;
     }
 
     logger.info("Document classification complete", {
@@ -283,14 +295,13 @@ Return ONLY the JSON object, no other text.`;
       error: error.message,
     });
 
-    // Fail-safe: reject on error to prevent processing non-CVs
+    // Fail-safe: default to supporting_document (don't reject unless clearly irrelevant)
     return {
-      document_type: "other",
-      confidence: 0.0,
-      reasoning: `Classification failed with error: ${error.message}`,
-      should_process: false,
+      document_type: "supporting_document",
+      confidence: 0.3,
+      reasoning: `Classification failed with error: ${error.message} - defaulting to supporting document`,
+      should_process: true,
       key_indicators: ["classification_error"],
-      rejection_reason: `Classification system error: ${error.message}`,
     };
   }
 }
@@ -323,14 +334,13 @@ export async function classifyDocuments(
         error: error.message,
       });
 
-      // Add error result
+      // Add error result - default to supporting_document
       results.push({
-        document_type: "other",
-        confidence: 0.0,
-        reasoning: `Batch classification error: ${error.message}`,
-        should_process: false,
+        document_type: "supporting_document",
+        confidence: 0.3,
+        reasoning: `Batch classification error: ${error.message} - defaulting to supporting document`,
+        should_process: true,
         key_indicators: ["batch_error"],
-        rejection_reason: error.message,
       });
     }
   }
@@ -351,8 +361,10 @@ export function getClassificationStats(results: ClassificationResult[]): {
   low_confidence: number;
 } {
   const total = results.length;
+  // Accepted includes all documents that should be processed
   const accepted = results.filter((r) => r.should_process).length;
-  const rejected = total - accepted;
+  // Rejected only includes truly irrelevant documents
+  const rejected = results.filter((r) => !r.should_process && r.document_type === "irrelevant").length;
 
   const byType: Record<string, number> = {};
   let totalConfidence = 0;
@@ -407,16 +419,22 @@ export function logClassificationStats(
   });
 
   if (stats.rejected > 0) {
-    logger.warn("⚠️ Documents rejected", {
+    logger.warn("⚠️ Documents rejected (irrelevant)", {
       rejected: stats.rejected,
       rejection_rate: `${((stats.rejected / stats.total) * 100).toFixed(1)}%`,
+    });
+  } else {
+    logger.info("✅ All documents accepted (CV, cover letter, application, or supporting document)", {
+      accepted: stats.accepted,
+      by_type: stats.by_type,
     });
   }
 }
 
 /**
  * Quick heuristic check before AI classification (cost optimization)
- * Returns true if document looks like it might be a CV (worth AI classifying)
+ * Returns true if document looks like it might be recruitment-related (worth AI classifying)
+ * Accepts CV, cover letter, application, supporting documents - only rejects clearly irrelevant
  */
 export function quickHeuristicCheck(rawText: string, fileName: string): {
   likely_cv: boolean;
@@ -426,10 +444,13 @@ export function quickHeuristicCheck(rawText: string, fileName: string): {
   const lower = rawText.toLowerCase();
   const fileNameLower = fileName.toLowerCase();
 
-  // CV-positive indicators
-  const cvIndicators = [
+  // Recruitment-related positive indicators (CV, cover letter, application)
+  const recruitmentIndicators = [
     "curriculum vitae",
     "resume",
+    "cover letter",
+    "motivation letter",
+    "application",
     "work experience",
     "employment history",
     "education",
@@ -438,9 +459,13 @@ export function quickHeuristicCheck(rawText: string, fileName: string): {
     "professional summary",
     "career objective",
     "references available",
+    "applying for",
+    "position",
+    "job",
+    "candidate",
   ];
 
-  // CV-negative indicators (strong signals it's NOT a CV)
+  // Negative indicators (strong signals it's NOT recruitment-related)
   const negativeIndicators = [
     "invoice number",
     "payment due",
@@ -452,42 +477,50 @@ export function quickHeuristicCheck(rawText: string, fileName: string): {
     "estimate",
     "terms and conditions",
     "contract agreement",
+    "legal document",
   ];
 
-  // Check filename
-  if (fileNameLower.includes("cv") || fileNameLower.includes("resume")) {
+  // Check filename patterns
+  if (
+    fileNameLower.includes("cv") ||
+    fileNameLower.includes("resume") ||
+    fileNameLower.includes("cover") ||
+    fileNameLower.includes("application") ||
+    fileNameLower.includes("app")
+  ) {
     return {
       likely_cv: true,
       confidence: 0.8,
-      reason: "Filename contains CV/resume",
+      reason: "Filename indicates recruitment document",
     };
   }
 
   if (
     fileNameLower.includes("invoice") ||
     fileNameLower.includes("bill") ||
-    fileNameLower.includes("receipt")
+    fileNameLower.includes("receipt") ||
+    fileNameLower.includes("contract")
   ) {
     return {
       likely_cv: false,
       confidence: 0.9,
-      reason: "Filename indicates invoice/bill",
+      reason: "Filename indicates non-recruitment document",
     };
   }
 
   // Count indicators in text
-  let cvScore = 0;
+  let recruitmentScore = 0;
   let negativeScore = 0;
 
-  for (const indicator of cvIndicators) {
-    if (lower.includes(indicator)) cvScore++;
+  for (const indicator of recruitmentIndicators) {
+    if (lower.includes(indicator)) recruitmentScore++;
   }
 
   for (const indicator of negativeIndicators) {
     if (lower.includes(indicator)) negativeScore++;
   }
 
-  // Decision logic
+  // Decision logic - only reject if clearly irrelevant
   if (negativeScore >= 2) {
     return {
       likely_cv: false,
@@ -496,23 +529,23 @@ export function quickHeuristicCheck(rawText: string, fileName: string): {
     };
   }
 
-  if (cvScore >= 3) {
+  if (recruitmentScore >= 3) {
     return {
       likely_cv: true,
       confidence: 0.75,
-      reason: `Found ${cvScore} CV indicators`,
+      reason: `Found ${recruitmentScore} recruitment indicators`,
     };
   }
 
-  if (cvScore >= 1) {
+  if (recruitmentScore >= 1) {
     return {
       likely_cv: true,
       confidence: 0.6,
-      reason: `Found some CV indicators (${cvScore}), worth AI check`,
+      reason: `Found some recruitment indicators (${recruitmentScore}), worth AI check`,
     };
   }
 
-  // Default: uncertain, let AI decide
+  // Default: allow AI to classify (don't reject)
   return {
     likely_cv: true,
     confidence: 0.5,

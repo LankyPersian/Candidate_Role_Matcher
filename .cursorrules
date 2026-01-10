@@ -1,0 +1,29 @@
+PROJECT CONTEXT:
+This is a recruitment automation platform for processing CVs.
+
+TECH STACK:
+- Frontend: Vanilla HTML/CSS/JS with Supabase JS client
+- Backend: Trigger.dev tasks (TypeScript)
+- Database: Supabase PostgreSQL
+- Storage: Supabase Storage
+- AI: Google Gemini 2.0 Flash
+- CRM: GoHighLevel API
+
+CRITICAL RULES:
+1. Never use localStorage/sessionStorage (not supported in Supabase environment)
+2. Always use SERVICE_ROLE_KEY for backend, ANON_KEY for frontend
+3. All file uploads go to cv-uploads bucket
+4. Follow the exact flow: Setup Filters → Upload → Process → Review → Complete
+5. Real-time updates via Supabase Realtime (postgres_changes)
+6. All candidate data must sync to both Supabase AND GoHighLevel
+
+FILE NAMING CONVENTION:
+- Frontend: kebab-case.html
+- Backend: camelCase.ts
+- Database: snake_case tables/columns
+
+NEVER:
+- Use external libraries not already imported
+- Create new npm packages without asking
+- Modify environment variable names
+- Change database schema without migration script

@@ -115,7 +115,7 @@
       color: var(--error);
     }
 
-    select, input[type="text"], input[type="email"], input[type="tel"] {
+    select, input[type="text"], input[type="email"], input[type="tel"], textarea {
       width: 100%;
       padding: 12px 16px;
       font-size: 15px;
@@ -127,10 +127,69 @@
       transition: all 0.2s ease;
     }
 
-    select:focus, input:focus {
+    textarea {
+      min-height: 100px;
+      resize: vertical;
+      font-family: inherit;
+    }
+
+    select:focus, input:focus, textarea:focus {
       outline: none;
       border-color: var(--border-focus);
       box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }
+
+    /* Checkbox Styles */
+    .checkbox-group {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      transition: all 0.2s ease;
+    }
+
+    .checkbox-group:hover {
+      border-color: var(--border-focus);
+    }
+
+    .checkbox-group input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      margin-top: 2px;
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
+
+    .checkbox-group label {
+      flex: 1;
+      margin-bottom: 0;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .checkbox-description {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Step Badge */
+    .step-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      background: var(--accent);
+      color: white;
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 8px;
     }
 
     /* Radio Group Styles */
@@ -1032,27 +1091,14 @@
       <p>Upload candidate CVs for processing and matching</p>
     </div>
 
-    <!-- Main Upload Card -->
-    <div class="card" id="upload-card">
+    <!-- Setup Filters Card (Step 1) -->
+    <div class="card" id="setup-card">
       <div class="card-title">
-        <span class="icon">📄</span>
-        Upload Configuration
+        <span class="step-badge">1</span>
+        Pre-Qualification Filters
       </div>
 
-      <!-- Colleague -->
-      <div class="form-group">
-        <label>Colleague <span class="required">*</span></label>
-        <select id="colleague-select" required>
-          <option value="">Select colleague...</option>
-          <option value="Karen Andrews">Karen Andrews</option>
-          <option value="Oliver Smith">Oliver Smith</option>
-          <option value="Amelia Johnson">Amelia Johnson</option>
-          <option value="James Wilson">James Wilson</option>
-          <option value="Emma Davis">Emma Davis</option>
-        </select>
-      </div>
-
-      <!-- ✅ NEW: Upload Type -->
+      <!-- Upload Type -->
       <div class="form-group">
         <label>Upload Type</label>
         <div class="radio-group">
@@ -1073,10 +1119,64 @@
         </div>
       </div>
 
-      <!-- ✅ NEW: Job ID (only shown when Specific Job selected) -->
+      <!-- Job ID (only shown when Specific Job selected) -->
       <div class="form-group" id="job-id-group" style="display: none;">
         <label>Job ID <span class="required">*</span></label>
         <input type="text" id="job-id-input" placeholder="e.g., JOB-2025-047">
+      </div>
+
+      <!-- Required Skills -->
+      <div class="form-group">
+        <label>Required Skills</label>
+        <textarea id="required-skills-input" placeholder="e.g., Python, React, AWS"></textarea>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">
+          Enter skills separated by commas
+        </div>
+      </div>
+
+      <!-- Exclude Students -->
+      <div class="form-group">
+        <div class="checkbox-group">
+          <input type="checkbox" id="exclude-students-checkbox" checked>
+          <label for="exclude-students-checkbox">
+            Exclude Students
+            <div class="checkbox-description">
+              Automatically filter out candidates who are currently students
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Proceed to Upload Button -->
+      <button class="btn btn-primary" id="proceed-btn">
+        Proceed to Upload
+      </button>
+
+      <!-- Status Message for Setup -->
+      <div class="status-message" id="setup-status-message">
+        <span class="status-icon"></span>
+        <span class="status-text"></span>
+      </div>
+    </div>
+
+    <!-- Main Upload Card (Step 2) -->
+    <div class="card" id="upload-card" style="display: none;">
+      <div class="card-title">
+        <span class="step-badge">2</span>
+        Upload Configuration
+      </div>
+
+      <!-- Colleague -->
+      <div class="form-group">
+        <label>Colleague <span class="required">*</span></label>
+        <select id="colleague-select" required>
+          <option value="">Select colleague...</option>
+          <option value="Karen Andrews">Karen Andrews</option>
+          <option value="Oliver Smith">Oliver Smith</option>
+          <option value="Amelia Johnson">Amelia Johnson</option>
+          <option value="James Wilson">James Wilson</option>
+          <option value="Emma Davis">Emma Davis</option>
+        </select>
       </div>
 
       <!-- Upload Zone -->
@@ -1251,6 +1351,18 @@
     // ============================================
     // STATE
     // ============================================
+    const STATE = {
+      filters: {
+        uploadType: 'general',
+        jobId: null,
+        requiredSkills: [],
+        excludeStudents: true
+      },
+      colleague: null,
+      batchId: null,
+      files: []
+    };
+
     let selectedFiles = [];
     let currentBatchId = null;
     let realtimeChannel = null;
@@ -1268,6 +1380,16 @@
     };
 
     // DOM Elements
+    const setupCard = document.getElementById('setup-card');
+    const proceedBtn = document.getElementById('proceed-btn');
+    const setupStatusMessage = document.getElementById('setup-status-message');
+    const jobIdGroup = document.getElementById('job-id-group');
+    const jobIdInput = document.getElementById('job-id-input');
+    const typeGeneral = document.getElementById('type-general');
+    const typeSpecific = document.getElementById('type-specific');
+    const requiredSkillsInput = document.getElementById('required-skills-input');
+    const excludeStudentsCheckbox = document.getElementById('exclude-students-checkbox');
+    
     const uploadZone = document.getElementById('upload-zone');
     const fileInput = document.getElementById('file-input');
     const fileList = document.getElementById('file-list');
@@ -1289,12 +1411,6 @@
     const reviewCountEl = document.getElementById('review-count');
     const successList = document.getElementById('success-list');
     const successItems = document.getElementById('success-items');
-    
-    // ✅ NEW: Upload Type Elements
-    const jobIdGroup = document.getElementById('job-id-group');
-    const jobIdInput = document.getElementById('job-id-input');
-    const typeGeneral = document.getElementById('type-general');
-    const typeSpecific = document.getElementById('type-specific');
 
     // ============================================
     // FILE HANDLING
@@ -1331,7 +1447,7 @@
 
       selectedFiles = [...selectedFiles, ...validFiles].slice(0, 500);
       renderFileList();
-      validateForm();
+      validateUploadForm();
     }
 
     function renderFileList() {
@@ -1358,14 +1474,14 @@
     function removeFile(index) {
       selectedFiles.splice(index, 1);
       renderFileList();
-      validateForm();
+      validateUploadForm();
     }
 
     clearFilesBtn.addEventListener('click', () => {
       selectedFiles = [];
       fileInput.value = '';
       renderFileList();
-      validateForm();
+      validateUploadForm();
     });
 
     function getFileIcon(filename) {
@@ -1385,32 +1501,111 @@
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    // ✅ NEW: Upload Type Toggle
+    // ============================================
+    // SETUP FILTERS HANDLING
+    // ============================================
+
+    // Upload Type Toggle
     typeGeneral.addEventListener('change', () => {
       jobIdGroup.style.display = 'none';
       jobIdInput.value = '';
-      validateForm();
     });
 
     typeSpecific.addEventListener('change', () => {
       jobIdGroup.style.display = 'block';
-      validateForm();
+      jobIdInput.focus();
     });
 
-    colleagueSelect.addEventListener('change', validateForm);
-    jobIdInput.addEventListener('input', validateForm); // ✅ NEW
-
-    // ✅ UPDATED: Validation now includes Job ID check
-    function validateForm() {
-      const hasFiles = selectedFiles.length > 0;
-      const hasColleague = colleagueSelect.value !== '';
+    // Validate Setup Form
+    function validateSetupForm() {
       const isSpecificJob = typeSpecific.checked;
       const hasJobId = jobIdInput.value.trim() !== '';
       
       // If specific job selected, require job ID
-      const jobIdValid = !isSpecificJob || hasJobId;
+      return !isSpecificJob || hasJobId;
+    }
+
+    // Parse Required Skills
+    function parseRequiredSkills(skillsText) {
+      if (!skillsText || !skillsText.trim()) return [];
       
-      uploadBtn.disabled = !(hasFiles && hasColleague && jobIdValid);
+      return skillsText
+        .split(',')
+        .map(skill => skill.trim())
+        .filter(skill => skill.length > 0);
+    }
+
+    // Show Setup Status Message
+    function showSetupStatus(message, type = 'info') {
+      const icons = { success: '✓', error: '✕', info: 'ℹ' };
+      setupStatusMessage.querySelector('.status-icon').textContent = icons[type];
+      setupStatusMessage.querySelector('.status-text').textContent = message;
+      setupStatusMessage.className = `status-message show ${type}`;
+      
+      setTimeout(() => {
+        setupStatusMessage.classList.remove('show');
+      }, 5000);
+    }
+
+    // Proceed to Upload Button Handler
+    proceedBtn.addEventListener('click', () => {
+      // Validate form
+      if (!validateSetupForm()) {
+        showSetupStatus('Job ID is required when "Specific Job" is selected', 'error');
+        if (typeSpecific.checked) {
+          jobIdInput.focus();
+        }
+        return;
+      }
+
+      // Parse and save filters to STATE
+      const uploadType = document.querySelector('input[name="upload-type"]:checked').value;
+      const jobId = typeSpecific.checked ? jobIdInput.value.trim() : null;
+      const requiredSkills = parseRequiredSkills(requiredSkillsInput.value);
+      const excludeStudents = excludeStudentsCheckbox.checked;
+
+      STATE.filters = {
+        uploadType,
+        jobId,
+        requiredSkills,
+        excludeStudents
+      };
+
+      // Build success message with configured filters
+      let filtersSummary = [];
+      if (uploadType === 'specific' && jobId) {
+        filtersSummary.push(`Job ID: ${jobId}`);
+      }
+      if (requiredSkills.length > 0) {
+        filtersSummary.push(`Required Skills: ${requiredSkills.join(', ')}`);
+      }
+      if (excludeStudents) {
+        filtersSummary.push('Exclude Students: Yes');
+      }
+
+      // Hide setup card and show upload card
+      setupCard.style.display = 'none';
+      uploadCard.style.display = 'block';
+
+      // Show success message
+      if (filtersSummary.length > 0) {
+        showStatus(`Filters configured: ${filtersSummary.join(' • ')}`, 'success');
+      } else {
+        showStatus('Filters configured: General pool, no restrictions', 'success');
+      }
+    });
+
+    // ============================================
+    // UPLOAD FORM VALIDATION
+    // ============================================
+
+    colleagueSelect.addEventListener('change', validateUploadForm);
+
+    function validateUploadForm() {
+      const hasFiles = selectedFiles.length > 0;
+      const hasColleague = colleagueSelect.value !== '';
+      
+      uploadBtn.disabled = !(hasFiles && hasColleague);
     }
 
     // ============================================
@@ -1421,10 +1616,16 @@
 
     async function startUpload() {
       const colleague = colleagueSelect.value;
-      const jobId = jobIdInput.value.trim() || null; // ✅ NEW: Get job ID
-      const uploadType = document.querySelector('input[name="upload-type"]:checked').value; // ✅ NEW
       
-      currentBatchId = `batch_${Date.now()}`;
+      // Use filters from STATE
+      const { uploadType, jobId, requiredSkills, excludeStudents } = STATE.filters;
+      
+      // Update STATE
+      STATE.colleague = colleague;
+      STATE.files = selectedFiles;
+      STATE.batchId = `batch_${Date.now()}`;
+      currentBatchId = STATE.batchId;
+      
       submittedReviews = 0;
       reviewForms = {};
       successfulUploads = [];
@@ -1479,24 +1680,35 @@
       updateStageUI('upload', 'complete');
       updateStageUI('parse', 'active');
 
-      // ✅ UPDATED: Create batch record with job_id
+      // ✅ UPDATED: Create batch record with all filter data
       try {
-  const { error } = await supabaseClient
-    .from('processing_batches')
-    .insert({
-      id: currentBatchId,
-      client_id: '834adb2a-fe62-446b-bba3-540668481ac2', // ✅ FIXED: Added quotes
-      file_count: uploaded,
-      processed_count: 0,
-      status: 'pending',
-      colleague: colleague,
-      job_id: jobId
-    });
+        const batchData = {
+          id: currentBatchId,
+          client_id: CLIENT_ID,
+          file_count: uploaded,
+          processed_count: 0,
+          status: 'pending',
+          colleague: colleague,
+          upload_type: uploadType,
+          job_id: jobId,
+          required_skills: requiredSkills.length > 0 ? requiredSkills : null,
+          exclude_students: excludeStudents
+        };
 
-  if (error) console.error('Failed to create batch record:', error);
-} catch (err) {
-  console.error('Batch record error:', err);
-}
+        const { error } = await supabaseClient
+          .from('processing_batches')
+          .insert(batchData);
+
+        if (error) {
+          console.error('Failed to create batch record:', error);
+          showStatus('Failed to create batch record: ' + error.message, 'error');
+        } else {
+          console.log('✅ Batch record created with filters:', batchData);
+        }
+      } catch (err) {
+        console.error('Batch record error:', err);
+        showStatus('Batch record error: ' + err.message, 'error');
+      }
 
       // Update UI
       progressTitle.textContent = 'Processing CVs...';
@@ -2297,18 +2509,40 @@ document.getElementById('duplicate-details').innerHTML = `
     }
 
     document.getElementById('upload-more-btn').addEventListener('click', () => {
+      // Reset all state
       selectedFiles = [];
       fileInput.value = '';
       renderFileList();
-      validateForm();
+      validateUploadForm();
       completionCard.classList.remove('show');
-      uploadCard.style.display = 'block';
+      uploadCard.style.display = 'none';
+      setupCard.style.display = 'block';
       resetUploadUI();
       hideStatus();
       reviewFormsContainer.innerHTML = '';
       inlineReviews.classList.remove('show');
       successItems.innerHTML = '';
       successList.classList.remove('show');
+      
+      // Reset filters form
+      typeGeneral.checked = true;
+      typeSpecific.checked = false;
+      jobIdGroup.style.display = 'none';
+      jobIdInput.value = '';
+      requiredSkillsInput.value = '';
+      excludeStudentsCheckbox.checked = true;
+      colleagueSelect.value = '';
+      
+      // Reset STATE
+      STATE.filters = {
+        uploadType: 'general',
+        jobId: null,
+        requiredSkills: [],
+        excludeStudents: true
+      };
+      STATE.colleague = null;
+      STATE.batchId = null;
+      STATE.files = [];
     });
 
     function resetUploadUI() {
