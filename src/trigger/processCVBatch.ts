@@ -47,6 +47,14 @@ import { buildCompleteGHLCustomFields, splitName } from "./ghlTransformers";
 // TYPES
 // ============================================
 
+interface BatchConfig {
+  upload_type: 'general' | 'specific';
+  job_id: string | null;
+  required_skills: string[];
+  exclude_students: boolean;
+  colleague: string;
+}
+
 interface CVBatchPayload {
   batchId: string;
   clientId: string;
@@ -97,6 +105,7 @@ interface BatchStats {
   total_files: number;
   classified: number;
   rejected_by_classification: number;
+  rejected_by_filters: number;
   processed: number;
   failed: number;
   held_for_review: number;
@@ -109,6 +118,71 @@ interface BatchStats {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ============================================
+// BATCH CONFIGURATION
+// ============================================
+
+async function loadBatchConfig(batchId: string): Promise<BatchConfig> {
+  const response = await fetch(
+    `${ENV.SUPABASE_URL}/rest/v1/processing_batches?id=eq.${batchId}&select=upload_type,job_id,required_skills,exclude_students,colleague&limit=1`,
+    {
+      headers: {
+        Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+        apikey: ENV.SUPABASE_SERVICE_KEY,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to load batch config: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const config = data[0];
+
+  return {
+    upload_type: config?.upload_type || 'general',
+    job_id: config?.job_id || null,
+    required_skills: config?.required_skills || [],
+    exclude_students: config?.exclude_students ?? false,
+    colleague: config?.colleague || 'Unknown',
+  };
+}
+
+async function recordFilterRejection(
+  batchId: string,
+  fileName: string,
+  filePath: string,
+  filterData: {
+    reason: string;
+    [key: string]: any;
+  }
+): Promise<void> {
+  try {
+    await fetch(`${ENV.SUPABASE_URL}/rest/v1/rejected_documents`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ENV.SUPABASE_SERVICE_KEY}`,
+        apikey: ENV.SUPABASE_SERVICE_KEY,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        batch_id: batchId,
+        file_name: fileName,
+        file_path: filePath,
+        rejection_type: 'filter',
+        rejection_reason: filterData.reason,
+        classification_data: filterData,
+      }),
+    });
+  } catch (error: any) {
+    logger.warn('Failed to record filter rejection', {
+      error: error.message,
+    });
+  }
 }
 
 // ============================================
@@ -193,11 +267,23 @@ export const processCVBatch = task({
       // 5) Mark batch as processing
       await updateBatchStatus(batchId, "processing");
 
+      // Load batch configuration
+      const batchConfig = await loadBatchConfig(batchId);
+      logger.info("✅ Batch configuration loaded", {
+        batchId,
+        uploadType: batchConfig.upload_type,
+        jobId: batchConfig.job_id,
+        requiredSkills: batchConfig.required_skills,
+        excludeStudents: batchConfig.exclude_students,
+        colleague: batchConfig.colleague,
+      });
+
       // Initialize stats
       const stats: BatchStats = {
         total_files: files.length,
         classified: 0,
         rejected_by_classification: 0,
+        rejected_by_filters: 0,
         processed: 0,
         failed: 0,
         held_for_review: 0,
@@ -393,6 +479,73 @@ export const processCVBatch = task({
             phone: quickData.phone || "none",
             name: quickData.full_name || "none",
           });
+
+          // PRE-QUALIFICATION FILTERING
+          // Check student status
+          if (batchConfig.exclude_students && quickData.is_student === true) {
+            logger.warn("❌ Rejected by filter - student status", {
+              correlationId,
+              fileName: file.name,
+            });
+
+            stats.rejected_by_filters++;
+            await recordFilterRejection(batchId, file.name, file.path, {
+              reason: "Currently enrolled as student (excluded by filter)",
+              is_student: true,
+            });
+
+            await updateFileStatus(
+              batchId,
+              file.path,
+              file.name,
+              "rejected",
+              "Currently enrolled as student"
+            );
+
+            continue;
+          }
+
+          // Check required skills
+          if (batchConfig.required_skills.length > 0) {
+            const candidateSkills = quickData.skills || [];
+            const hasRequiredSkills = batchConfig.required_skills.some(requiredSkill =>
+              candidateSkills.some(skill =>
+                skill.toLowerCase().includes(requiredSkill.toLowerCase())
+              )
+            );
+
+            if (!hasRequiredSkills) {
+              const missingSkills = batchConfig.required_skills.filter(req =>
+                !candidateSkills.some(cs => cs.toLowerCase().includes(req.toLowerCase()))
+              );
+
+              logger.warn("❌ Rejected by filter - missing required skills", {
+                correlationId,
+                fileName: file.name,
+                required: batchConfig.required_skills,
+                found: candidateSkills,
+                missing: missingSkills,
+              });
+
+              stats.rejected_by_filters++;
+              await recordFilterRejection(batchId, file.name, file.path, {
+                reason: `Missing required skills: ${missingSkills.join(', ')}`,
+                required_skills: batchConfig.required_skills,
+                candidate_skills: candidateSkills,
+                missing_skills: missingSkills,
+              });
+
+              await updateFileStatus(
+                batchId,
+                file.path,
+                file.name,
+                "rejected",
+                `Missing required skills: ${missingSkills.join(', ')}`
+              );
+
+              continue;
+            }
+          }
 
           // Check for required contact info
           const hasEmail = quickData.email && isValidEmail(quickData.email);
@@ -684,7 +837,7 @@ export const processCVBatch = task({
           }
 
           // Update batch progress
-          await updateBatchProgress(batchId, stats.processed + stats.held_for_review + stats.failed + stats.rejected_by_classification, files.length);
+          await updateBatchProgress(batchId, stats.processed + stats.held_for_review + stats.failed + stats.rejected_by_classification + stats.rejected_by_filters, files.length);
         } catch (fileError: any) {
           logger.error("❌ File processing exception", {
             correlationId,
@@ -720,7 +873,7 @@ export const processCVBatch = task({
 
       // Final batch status
       const finalStatus = stats.held_for_review > 0 ? "awaiting_input" : "complete";
-      await updateBatchStatus(batchId, finalStatus, stats.processed + stats.failed + stats.held_for_review + stats.rejected_by_classification);
+      await updateBatchStatus(batchId, finalStatus, stats.processed + stats.failed + stats.held_for_review + stats.rejected_by_classification + stats.rejected_by_filters);
 
       // Log cost summary
       await logBatchCostSummary(batchId);
@@ -853,7 +1006,7 @@ function stripJsonFences(s: string): string {
   return t;
 }
 
-async function quickParse(rawText: string): Promise<Partial<ParsedCV>> {
+async function quickParse(rawText: string): Promise<Partial<ParsedCV> & { is_student?: boolean }> {
   const sampleText = rawText.substring(0, PROCESSING_CONFIG.MAX_TEXT_LENGTH_FOR_PARSE);
 
   const prompt = `Extract ONLY the following fields from this CV/resume. Return ONLY valid JSON in this exact format:
@@ -861,7 +1014,9 @@ async function quickParse(rawText: string): Promise<Partial<ParsedCV>> {
 {
   "full_name": "string or null",
   "email": "string or null",
-  "phone": "string or null"
+  "phone": "string or null",
+  "is_student": "boolean - true if currently enrolled in education, false otherwise",
+  "skills": ["array of skill strings"]
 }
 
 CV Text:
@@ -893,12 +1048,19 @@ Return ONLY the JSON object, no other text.`;
   const cleaned = stripJsonFences(rawOutput);
 
   try {
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    return {
+      full_name: parsed.full_name || null,
+      email: parsed.email || null,
+      phone: parsed.phone || null,
+      is_student: parsed.is_student ?? false,
+      skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+    };
   } catch {
     logger.warn("Failed to parse Gemini quick parse output", {
       outputPreview: truncateForLog(cleaned, 500),
     });
-    return { full_name: null, email: null, phone: null };
+    return { full_name: null, email: null, phone: null, is_student: false, skills: [] };
   }
 }
 
