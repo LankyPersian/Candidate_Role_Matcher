@@ -1015,8 +1015,8 @@ async function quickParse(rawText: string): Promise<Partial<ParsedCV> & { is_stu
   "full_name": "string or null",
   "email": "string or null",
   "phone": "string or null",
-  "is_student": "boolean - true if currently enrolled in education, false otherwise",
-  "skills": ["array of skill strings"]
+  "is_student": "boolean - true if currently enrolled in education/university/college",
+  "skills": ["array of skill strings - technical skills, programming languages, tools, frameworks"]
 }
 
 CV Text:
@@ -1060,7 +1060,13 @@ Return ONLY the JSON object, no other text.`;
     logger.warn("Failed to parse Gemini quick parse output", {
       outputPreview: truncateForLog(cleaned, 500),
     });
-    return { full_name: null, email: null, phone: null, is_student: false, skills: [] };
+    return { 
+      full_name: null, 
+      email: null, 
+      phone: null,
+      is_student: false,
+      skills: []
+    };
   }
 }
 
